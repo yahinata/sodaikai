@@ -102,10 +102,17 @@ const INIT = {
 
 function reducer(s,{type:t,p}) {
   switch(t) {
-    case "USER":    return {...s,user:p,screen:p?(s.members.length?"dash":"csv"):"login"};
+    case "USER":    return {...s,user:p,screen:p?"loading":"login"};
     case "SCREEN":  return {...s,screen:p};
+    // MEMBERS: CSV取り込み後。GAS保存済みなのでそのままdashへ
     case "MEMBERS": return {...s,members:p,screen:"dash"};
-    case "SYNC":    return {...s,...p,syncing:false,loading:false};
+    // SYNC: データ取得完了。ログイン直後(loading)なら名簿有無で画面を決定
+    case "SYNC": {
+      const goTo = s.screen==="loading"
+        ? (p.members?.length>0 ? "dash" : "csv")
+        : s.screen;
+      return {...s,...p,syncing:false,loading:false,screen:goTo};
+    }
     case "LOAD":    return {...s,loading:p};
     case "SYNCING": return {...s,syncing:p};
     case "TOAST":   return {...s,toast:p};
@@ -258,11 +265,52 @@ function MemberList({onSelect}) {
 /* ================================================================
    LOGIN SCREEN
    ================================================================ */
+/* ================================================================
+   LOADING SCREEN  — ログイン後のデータ取得中に表示
+   ================================================================ */
+function LoadingScreen() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-6"
+      style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <div style={{fontSize:56}}>🏛️</div>
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 rounded-full border-4 border-white border-t-transparent animate-spin"/>
+        <p className="text-white font-bold text-sm" style={{color:"rgba(255,255,255,.7)"}}>データを読み込んでいます…</p>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   LOGIN SCREEN
+   ================================================================ */
 function LoginScreen() {
   const {state,dispatch} = useApp();
-  const sync = useSync();
-  useEffect(()=>{if(!IS_DEMO)sync();},[]);
-  const users = state.users.length?state.users:DEMO_USERS;
+  // ログイン画面表示時にユーザー一覧だけ取得（名簿は取得しない）
+  useEffect(()=>{
+    if(!IS_DEMO && !state.users.length){
+      api.getAll().then(d=>{ if(d.users) dispatch({type:"SYNC",p:{...d,screen:"login"}}); }).catch(()=>{});
+    }
+  },[]);
+
+  const handleLogin = async u => {
+    // まずユーザーをセット → screen:"loading" になる
+    dispatch({type:"USER",p:u});
+    if(IS_DEMO){
+      // デモ: 即座にデモデータをSYNC
+      dispatch({type:"SYNC",p:{members:DEMO_MEMBERS,agendas:DEMO_AGENDAS,users:DEMO_USERS,statuses:{}}});
+      return;
+    }
+    try{
+      const d = await api.getAll();
+      dispatch({type:"SYNC",p:d}); // SYNC内でmembers有無→dash/csvを決定
+    } catch {
+      // GAS接続失敗時はCSV画面へ
+      dispatch({type:"SCREEN",p:"csv"});
+    }
+  };
+
+  const users = state.users.length ? state.users : DEMO_USERS;
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
       <div className="text-center mb-10">
@@ -273,7 +321,7 @@ function LoginScreen() {
       <div className="w-full max-w-sm space-y-3">
         <p className="text-center text-xs mb-3" style={{color:"rgba(255,255,255,.4)"}}>担当者をタップしてください</p>
         {users.map(u=>(
-          <button key={u.id} onClick={()=>dispatch({type:"USER",p:u})}
+          <button key={u.id} onClick={()=>handleLogin(u)}
             className="w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-white font-bold active:scale-95 transition-all"
             style={{backgroundColor:"rgba(255,255,255,.1)"}}>
             <span style={{fontSize:28}}>{u.icon}</span>
@@ -309,12 +357,20 @@ function CsvScreen() {
 
   const handleImport = async () => {
     if(!preview?.length) return;
-    dispatch({type:"MEMBERS",p:preview});
-    if(!IS_DEMO){
-      try{await api.importMembers(preview);}
-      catch{toast("サーバー保存に失敗しました（ローカルのみ有効）","warn");}
+    if(IS_DEMO){
+      dispatch({type:"MEMBERS",p:preview});
+      toast(`✅ ${preview.length}名の名簿をインポートしました`);
+      return;
     }
-    toast(`✅ ${preview.length}名の名簿をインポートしました`);
+    // GASへ先に保存し、成功したらローカルstateに反映
+    toast("保存中…","info",10000);
+    try{
+      await api.importMembers(preview);
+      dispatch({type:"MEMBERS",p:preview});
+      toast(`✅ ${preview.length}名の名簿を保存しました`);
+    }catch{
+      toast("サーバー保存に失敗しました。再試行してください","error");
+    }
   };
 
   return (
@@ -772,7 +828,7 @@ function ListScreen() {
 /* ================================================================
    APP ROOT
    ================================================================ */
-const SCREENS={login:LoginScreen,csv:CsvScreen,dash:DashScreen,qr:QRScreen,man:ManualScreen,lst:ListScreen};
+const SCREENS={login:LoginScreen,loading:LoadingScreen,csv:CsvScreen,dash:DashScreen,qr:QRScreen,man:ManualScreen,lst:ListScreen};
 
 function App() {
   const [state,dispatch]=useReducer(reducer,INIT);
