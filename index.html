@@ -81,9 +81,18 @@ function parseCsv(text) {
    ================================================================ */
 const api = {
   async req(action,method="GET",body=null) {
-    const res = await fetch(`${GAS_URL}?action=${action}`,{method,...(body&&{headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})});
+    const opts = {method, redirect:"follow"};
+    if(body){
+      // GASはContent-Type:application/jsonのPOSTでpreflight(OPTIONS)が発生して失敗する
+      // text/plainにするとpreflightなしで送れる（GAS定番の回避策）
+      opts.headers = {"Content-Type":"text/plain;charset=utf-8"};
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(`${GAS_URL}?action=${action}`, opts);
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    const text = await res.text();
+    try{ return JSON.parse(text); }
+    catch{ throw new Error("レスポンスのJSON解析に失敗: " + text.slice(0,100)); }
   },
   getAll:        ()  => api.req("getAll"),
   updateStatus:  d   => api.req("updateStatus","POST",d),
