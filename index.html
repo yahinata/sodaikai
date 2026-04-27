@@ -11,6 +11,8 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- QRライブラリをページ起動時に並行ロード → QR画面を開いたとき即起動できる -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js" async></script>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet"/>
   <style>
     *{box-sizing:border-box;}
@@ -29,7 +31,7 @@ const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,us
 /* ================================================================
    CONFIG & CONSTANTS
    ================================================================ */
-const GAS_URL = "https://script.google.com/macros/s/AKfycbz7kM0o3kskmfueUW2DpxCi1ssPkHjjauNTy4yjtxi4LOsaXCP9kWIMKGh30ETNW81rtQ/exec";
+const GAS_URL = "YOUR_GAS_URL_HERE";
 const IS_DEMO = GAS_URL === "YOUR_GAS_URL_HERE";
 const POLL_MS = 10000;
 const QUORUM  = 0.5;
@@ -593,21 +595,31 @@ function QrReader({members, onFound, onError}) {
 
   useEffect(()=>{
     if(!divRef.current) return;
-    const scanner = new window.Html5Qrcode(divRef.current.id);
-    scannerRef.current = scanner;
-    scanner.start(
-      {facingMode:"environment"},
-      {fps:10, qrbox:{width:240, height:240}},
-      text => {
-        const m = members.find(x=>x.id===text);
-        if(m) onFound(m);
-        else  onError("一致する総代が見つかりません");
-      },
-      ()=>{}
-    ).catch(()=>onError("カメラを起動できませんでした"));
-
+    // asyncタグで読み込み中の場合、最大2秒だけ待つ
+    let cancelled = false;
+    const tryStart = (attempts=0) => {
+      if(cancelled) return;
+      if(!window.Html5Qrcode){
+        if(attempts > 20){ onError("QRライブラリの読込がタイムアウトしました"); return; }
+        setTimeout(()=>tryStart(attempts+1), 100);
+        return;
+      }
+      const scanner = new window.Html5Qrcode(divRef.current.id);
+      scannerRef.current = scanner;
+      scanner.start(
+        {facingMode:"environment"},
+        {fps:10, qrbox:{width:240, height:240}},
+        text => {
+          const m = members.find(x=>x.id===text);
+          if(m) onFound(m);
+          else  onError("一致する総代が見つかりません");
+        },
+        ()=>{}
+      ).catch(()=>onError("カメラを起動できませんでした"));
+    };
+    tryStart();
     return ()=>{
-      // アンマウント時に必ず停止
+      cancelled = true;
       if(scannerRef.current){
         scannerRef.current.stop().catch(()=>{});
         scannerRef.current = null;
@@ -628,21 +640,9 @@ function QrReader({members, onFound, onError}) {
 function QRScreen() {
   const {state,dispatch} = useApp();
   const toast  = useToast();
-  const [phase,setPhase]   = useState("idle"); // idle | loading | scan | confirm | done
+  const [phase,setPhase]   = useState("idle"); // idle | scan | confirm | done
   const [found,setFound]   = useState(null);
   const [demoId,setDemoId] = useState(state.members[0]?.id||"");
-  const [libReady,setLibReady] = useState(!!window.Html5Qrcode);
-
-  // html5-qrcode を動的ロード（まだ読み込まれていない場合）
-  useEffect(()=>{
-    if(window.Html5Qrcode){setLibReady(true);return;}
-    setPhase("loading");
-    const sc = document.createElement("script");
-    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js";
-    sc.onload  = ()=>{setLibReady(true); setPhase("idle");};
-    sc.onerror = ()=>{toast("QRライブラリの読込に失敗しました","error"); setPhase("idle");};
-    document.head.appendChild(sc);
-  },[]);
 
   const handleFound = m => { setFound(m); setPhase("confirm"); };
   const handleError = msg => { toast(msg,"error"); setPhase("idle"); };
@@ -664,20 +664,11 @@ function QRScreen() {
     <div className="min-h-screen px-5 pt-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
       <Hdr title="📷 QRスキャン" onBack={goBack}/>
 
-      {/* ライブラリ読込中 */}
-      {phase==="loading"&&(
-        <div className="flex flex-col items-center pt-20 gap-4">
-          <div className="w-8 h-8 rounded-full border-4 border-white border-t-transparent animate-spin"/>
-          <p className="text-white text-sm" style={{opacity:.7}}>カメラを準備中…</p>
-        </div>
-      )}
-
       {/* 待機中 */}
       {phase==="idle"&&(
         <div className="flex flex-col items-center pt-8 gap-5">
           <div className="w-52 h-52 rounded-3xl flex items-center justify-center"
             style={{backgroundColor:"rgba(255,255,255,.1)",fontSize:80}}>📷</div>
-
           {IS_DEMO ? (
             <div className="w-full space-y-3">
               <p className="text-center text-sm" style={{color:"rgba(255,255,255,.6)"}}>デモ：総代を選択してシミュレート</p>
@@ -691,19 +682,17 @@ function QRScreen() {
                 この総代を受付する
               </button>
             </div>
-          ) : libReady ? (
+          ) : (
             <button onClick={()=>setPhase("scan")}
               className="px-10 py-4 rounded-2xl font-bold text-white text-lg active:scale-95 transition-all"
               style={{backgroundColor:T.gold}}>
               スキャン開始
             </button>
-          ) : (
-            <p className="text-sm" style={{color:"rgba(255,255,255,.5)"}}>ライブラリ読込中…</p>
           )}
         </div>
       )}
 
-      {/* スキャン中 — QrReaderをマウント（DIVが実サイズを持つ状態で初期化） */}
+      {/* スキャン中 */}
       {phase==="scan"&&(
         <div>
           <QrReader members={state.members} onFound={handleFound} onError={handleError}/>
