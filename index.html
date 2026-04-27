@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+  <title>総代会 出席管理システム</title>
+  <meta name="theme-color" content="#1B365D"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet"/>
+  <style>
+    *{box-sizing:border-box;}
+    body{margin:0;background:#EDF2F7;font-family:'Noto Sans JP',sans-serif;}
+    #root{max-width:430px;margin:0 auto;min-height:100vh;}
+    input,select,button{font-family:inherit;}
+    ::-webkit-scrollbar{width:4px;}
+    ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:2px;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext} = React;
+
+/* ================================================================
+   CONFIG & CONSTANTS
+   ================================================================ */
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz7kM0o3kskmfueUW2DpxCi1ssPkHjjauNTy4yjtxi4LOsaXCP9kWIMKGh30ETNW81rtQ/exec";
+const IS_DEMO = GAS_URL === "YOUR_GAS_URL_HERE";
+const POLL_MS = 10000;
+const QUORUM  = 0.5;
+
+// ステータス定義（デフォルト = NONE）
+const S = { NONE:"未入力", PRESENT:"出席", PROXY:"代理出席", BALLOT:"書面議決", ABSENT:"欠席" };
+const T = { navy:"#1B365D", nd:"#0d1f36", nl:"#2a518f", gold:"#C5A55A", bg:"#EDF2F7", ok:"#16a34a", ng:"#dc2626", warn:"#d97706" };
+
+const SCFG = {
+  [S.NONE]:    {bg:"#e5e7eb", fg:"#9ca3af", dot:"#d1d5db"},
+  [S.PRESENT]: {bg:T.ok,      fg:"#fff",    dot:T.ok},
+  [S.PROXY]:   {bg:T.nl,      fg:"#fff",    dot:T.nl},
+  [S.BALLOT]:  {bg:T.gold,    fg:"#fff",    dot:T.gold},
+  [S.ABSENT]:  {bg:"#9ca3af", fg:"#fff",    dot:"#9ca3af"},
+};
+
+/* ================================================================
+   DEMO DATA
+   ================================================================ */
+const DEMO_MEMBERS = (() => {
+  const N=[["鈴木一郎","スズキ イチロウ"],["田中義雄","タナカ ヨシオ"],["渡辺幸子","ワタナベ サチコ"],["山本健一","ヤマモト ケンイチ"],["伊藤美智子","イトウ ミチコ"],["中村正夫","ナカムラ マサオ"],["小林和子","コバヤシ カズコ"],["加藤達也","カトウ タツヤ"],["吉田悦子","ヨシダ エツコ"],["松本浩司","マツモト コウジ"]];
+  const D=["東地区","西地区","南地区","北地区","中央地区"];
+  return Array.from({length:30},(_,i)=>({id:`M${String(i+1).padStart(3,"0")}`,name:N[i%10][0],nameKana:N[i%10][1],district:D[i%5]}));
+})();
+const DEMO_USERS=[{id:"u1",name:"田中 花子",icon:"🌸"},{id:"u2",name:"山田 太郎",icon:"🏔️"},{id:"u3",name:"佐藤 次郎",icon:"🎋"}];
+const DEMO_AGENDAS=[
+  {id:"A1",title:"第1号議案：令和5年度事業報告承認の件",type:"普通決議"},
+  {id:"A2",title:"第2号議案：令和5年度決算承認の件",type:"普通決議"},
+  {id:"A3",title:"第3号議案：役員選任の件",type:"特別決議"},
+];
+
+/* ================================================================
+   CSV PARSER
+   ================================================================ */
+function parseCsv(text) {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return [];
+  const clean = l => l.replace(/^\uFEFF/,"");
+  const first = clean(lines[0]).split(",")[0].trim().replace(/^"|"$/g,"");
+  const dataLines = (isNaN(first) && !/^M\d+/i.test(first)) ? lines.slice(1) : lines;
+  return dataLines.map((line,idx) => {
+    const c = clean(line).split(",").map(x=>x.trim().replace(/^"|"$/g,""));
+    return {id:c[0]||`M${String(idx+1).padStart(3,"0")}`,name:c[1]||"",nameKana:c[2]||"",district:c[3]||"",tel:c[4]||""};
+  }).filter(m=>m.name);
+}
+
+/* ================================================================
+   API LAYER
+   ================================================================ */
+const api = {
+  async req(action,method="GET",body=null) {
+    const res = await fetch(`${GAS_URL}?action=${action}`,{method,...(body&&{headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  },
+  getAll:        ()  => api.req("getAll"),
+  updateStatus:  d   => api.req("updateStatus","POST",d),
+  importMembers: arr => api.req("importMembers","POST",{members:arr}),
+};
+
+/* ================================================================
+   REDUCER
+   statuses: { [memberId]: S.xxx }  デフォルトはキーなし = S.NONE
+   ================================================================ */
+const INIT = {
+  user:null, screen:"login",
+  members:[], statuses:{}, agendas:[], users:[],
+  loading:false, syncing:false, toast:null,
+};
+
+function reducer(s,{type:t,p}) {
+  switch(t) {
+    case "USER":    return {...s,user:p,screen:p?(s.members.length?"dash":"csv"):"login"};
+    case "SCREEN":  return {...s,screen:p};
+    case "MEMBERS": return {...s,members:p,screen:"dash"};
+    case "SYNC":    return {...s,...p,syncing:false,loading:false};
+    case "LOAD":    return {...s,loading:p};
+    case "SYNCING": return {...s,syncing:p};
+    case "TOAST":   return {...s,toast:p};
+    case "STATUS": {
+      const next={...s.statuses};
+      if(p.status===S.NONE) delete next[p.memberId];
+      else next[p.memberId]=p.status;
+      return {...s,statuses:next};
+    }
+    default: return s;
+  }
+}
+
+/* ================================================================
+   CONTEXT & HOOKS
+   ================================================================ */
+const Ctx = createContext();
+const useApp = () => useContext(Ctx);
+
+function useToast() {
+  const {dispatch} = useApp();
+  return useCallback((msg,type="ok",ms=2500)=>{
+    dispatch({type:"TOAST",p:{msg,type}});
+    setTimeout(()=>dispatch({type:"TOAST",p:null}),ms);
+  },[dispatch]);
+}
+
+function useSync() {
+  const {dispatch} = useApp();
+  return useCallback(async(silent=false)=>{
+    dispatch({type:silent?"SYNCING":"LOAD",p:true});
+    try{ dispatch({type:"SYNC",p:IS_DEMO?{members:DEMO_MEMBERS,agendas:DEMO_AGENDAS,users:DEMO_USERS,statuses:{}}:await api.getAll()}); }
+    catch{ dispatch({type:"LOAD",p:false}); }
+  },[dispatch]);
+}
+
+/* ================================================================
+   SHARED UI
+   ================================================================ */
+const cc=(...a)=>a.filter(Boolean).join(" ");
+
+function Toast({t}) {
+  if(!t) return null;
+  const bg={ok:T.ok,warn:T.warn,error:T.ng,info:T.nl}[t.type]||T.ok;
+  return <div className="fixed top-4 left-1/2 z-50 px-5 py-3 rounded-2xl text-white font-bold shadow-2xl text-sm pointer-events-none" style={{backgroundColor:bg,transform:"translateX(-50%)",maxWidth:320,textAlign:"center"}}>{t.msg}</div>;
+}
+
+function StatusChip({status,size="sm"}) {
+  const cfg=SCFG[status]||SCFG[S.NONE];
+  const cls=size==="lg"?"px-4 py-1.5 text-sm":"px-2.5 py-0.5 text-xs";
+  return <span className={cc(cls,"rounded-full font-bold whitespace-nowrap")} style={{backgroundColor:cfg.bg,color:cfg.fg}}>{status||S.NONE}</span>;
+}
+
+function Hdr({title,onBack,right}) {
+  return (
+    <div className="flex items-center gap-3 mb-5">
+      {onBack&&<button onClick={onBack} className="text-2xl p-1 font-black" style={{color:T.gold}}>←</button>}
+      <h2 className="text-xl font-black text-white flex-1">{title}</h2>
+      {right}
+    </div>
+  );
+}
+
+/* ================================================================
+   STATUS PICKER MODAL  — QR/手動どちらからでも共用
+   ================================================================ */
+function StatusModal({member,current,onClose,onSelect}) {
+  const OPTS=[
+    {s:S.PRESENT,sub:"当日来場された方"},
+    {s:S.PROXY,  sub:"代理人が来場された場合"},
+    {s:S.BALLOT, sub:"書面で議決権を行使"},
+    {s:S.ABSENT, sub:"欠席が確定した方"},
+    {s:S.NONE,   sub:"ステータスをリセット"},
+  ];
+  return (
+    <div className="fixed inset-0 z-40 flex items-end" onClick={onClose} style={{backgroundColor:"rgba(0,0,0,.55)"}}>
+      <div className="w-full rounded-t-3xl p-6 pb-10" style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}} onClick={e=>e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <p className="font-black text-2xl text-gray-800">{member.name}</p>
+            <p className="text-xs text-gray-400 mt-0.5">{member.nameKana}{member.district?` · ${member.district}`:""}</p>
+            <div className="mt-2"><StatusChip status={current}/></div>
+          </div>
+          <button onClick={onClose} className="text-gray-300 text-3xl leading-none">×</button>
+        </div>
+        <p className="text-xs font-bold text-gray-400 mb-3">ステータスを選択</p>
+        <div className="space-y-2">
+          {OPTS.map(({s,sub})=>{
+            const isCur = (current||S.NONE)===s;
+            const cfg = SCFG[s];
+            return (
+              <button key={s} onClick={()=>onSelect(s)}
+                className="w-full flex items-center gap-4 rounded-2xl px-4 py-3.5 text-left transition-all active:scale-98"
+                style={{border:isCur?`2px solid ${cfg.dot}`:"2px solid transparent",backgroundColor:isCur?"#f8fafc":"#f8fafc"}}>
+                <div className="w-3.5 h-3.5 rounded-full shrink-0" style={{backgroundColor:cfg.dot}}/>
+                <div className="flex-1">
+                  <p className="font-bold text-sm text-gray-800">{s}</p>
+                  <p className="text-xs text-gray-400">{sub}</p>
+                </div>
+                {isCur&&<span className="text-xs font-bold text-gray-300">現在</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   MEMBER LIST COMPONENT  — 手動・QRデモ・一覧画面で共用
+   ================================================================ */
+function MemberList({onSelect}) {
+  const {state} = useApp();
+  const [q,setQ] = useState("");
+  const statusOf = id => state.statuses[id]||S.NONE;
+  const list = useMemo(()=>{
+    if(!q) return state.members;
+    return state.members.filter(m=>m.name.includes(q)||(m.nameKana||"").includes(q)||(m.district||"").includes(q)||m.id.includes(q));
+  },[state.members,q]);
+  return (
+    <div>
+      <div className="relative mb-3">
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="氏名・カナ・地区で検索"
+          className="w-full pl-9 pr-9 py-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none"/>
+        {q&&<button onClick={()=>setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 text-lg">×</button>}
+      </div>
+      <div className="space-y-2" style={{maxHeight:"65vh",overflowY:"auto"}}>
+        {!list.length&&<p className="text-center py-10 text-sm" style={{color:"rgba(255,255,255,.4)"}}>該当なし</p>}
+        {list.map(m=>{
+          const st=statusOf(m.id);
+          return (
+            <button key={m.id} onClick={()=>onSelect(m)}
+              className="w-full text-left bg-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-sm active:scale-98 transition-all">
+              <div className="w-1.5 h-10 rounded-full shrink-0" style={{backgroundColor:SCFG[st].dot}}/>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-gray-800 text-sm">{m.name}</div>
+                <div className="text-xs text-gray-400 truncate">{m.nameKana}{m.district?` · ${m.district}`:""}</div>
+              </div>
+              <StatusChip status={st}/>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   LOGIN SCREEN
+   ================================================================ */
+function LoginScreen() {
+  const {state,dispatch} = useApp();
+  const sync = useSync();
+  useEffect(()=>{if(!IS_DEMO)sync();},[]);
+  const users = state.users.length?state.users:DEMO_USERS;
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center px-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <div className="text-center mb-10">
+        <div style={{fontSize:60}} className="mb-3">🏛️</div>
+        <h1 className="text-3xl font-black text-white">総代会</h1>
+        <p className="text-xs mt-1" style={{color:"rgba(255,255,255,.5)"}}>出席管理システム{IS_DEMO?" ｜ デモモード":""}</p>
+      </div>
+      <div className="w-full max-w-sm space-y-3">
+        <p className="text-center text-xs mb-3" style={{color:"rgba(255,255,255,.4)"}}>担当者をタップしてください</p>
+        {users.map(u=>(
+          <button key={u.id} onClick={()=>dispatch({type:"USER",p:u})}
+            className="w-full flex items-center gap-4 rounded-2xl px-5 py-4 text-white font-bold active:scale-95 transition-all"
+            style={{backgroundColor:"rgba(255,255,255,.1)"}}>
+            <span style={{fontSize:28}}>{u.icon}</span>
+            <span className="flex-1 text-left text-lg">{u.name}</span>
+            <span style={{opacity:.4}}>›</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   CSV IMPORT SCREEN
+   ================================================================ */
+function CsvScreen() {
+  const {state,dispatch} = useApp();
+  const toast = useToast();
+  const [preview,setPreview] = useState(null);
+  const [dragging,setDragging] = useState(false);
+  const fileRef = useRef();
+
+  const handleFile = file => {
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const members = parseCsv(e.target.result);
+      if(!members.length){toast("有効なデータが見つかりませんでした","error");return;}
+      setPreview(members);
+    };
+    reader.readAsText(file,"UTF-8");
+  };
+
+  const handleImport = async () => {
+    if(!preview?.length) return;
+    dispatch({type:"MEMBERS",p:preview});
+    if(!IS_DEMO){
+      try{await api.importMembers(preview);}
+      catch{toast("サーバー保存に失敗しました（ローカルのみ有効）","warn");}
+    }
+    toast(`✅ ${preview.length}名の名簿をインポートしました`);
+  };
+
+  return (
+    <div className="min-h-screen px-5 pt-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-black text-white">📂 名簿インポート</h2>
+          <p className="text-xs mt-0.5" style={{color:"rgba(255,255,255,.5)"}}>{state.user?.icon} {state.user?.name}</p>
+        </div>
+        {state.members.length>0&&(
+          <button onClick={()=>dispatch({type:"SCREEN",p:"dash"})}
+            className="text-xs px-3 py-2 rounded-xl font-bold"
+            style={{color:"rgba(255,255,255,.7)",backgroundColor:"rgba(255,255,255,.12)"}}>
+            ダッシュボードへ
+          </button>
+        )}
+      </div>
+
+      {!preview?(
+        <>
+          <div onClick={()=>fileRef.current.click()}
+            onDragOver={e=>{e.preventDefault();setDragging(true);}}
+            onDragLeave={()=>setDragging(false)}
+            onDrop={e=>{e.preventDefault();setDragging(false);handleFile(e.dataTransfer.files[0]);}}
+            className="rounded-3xl border-2 border-dashed flex flex-col items-center justify-center py-14 gap-4 cursor-pointer transition-all"
+            style={{borderColor:dragging?T.gold:"rgba(255,255,255,.3)",backgroundColor:"rgba(255,255,255,.07)"}}>
+            <div style={{fontSize:48}}>📄</div>
+            <div className="text-center">
+              <p className="text-white font-bold text-lg">CSVファイルを選択</p>
+              <p className="text-xs mt-1" style={{color:"rgba(255,255,255,.5)"}}>またはここにドロップ</p>
+            </div>
+          </div>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={e=>handleFile(e.target.files[0])}/>
+
+          <div className="mt-4 rounded-2xl p-4" style={{backgroundColor:"rgba(255,255,255,.08)"}}>
+            <p className="text-xs font-bold mb-2" style={{color:T.gold}}>CSVフォーマット（1行1名）</p>
+            <p className="text-xs text-white font-mono" style={{opacity:.7}}>総代ID, 氏名, 氏名カナ, 所属地区, 電話番号</p>
+            <p className="text-xs mt-2" style={{color:"rgba(255,255,255,.4)"}}>
+              ・1行目がヘッダーなら自動スキップ<br/>
+              ・総代IDなしの場合は自動採番<br/>
+              ・UTF-8 / Shift-JIS 対応
+            </p>
+          </div>
+
+          {IS_DEMO&&(
+            <button onClick={()=>{dispatch({type:"MEMBERS",p:DEMO_MEMBERS});toast(`✅ デモデータ（${DEMO_MEMBERS.length}名）を読み込みました`);}}
+              className="w-full mt-4 py-4 rounded-2xl font-bold text-white active:scale-95 transition-all"
+              style={{backgroundColor:"rgba(255,255,255,.15)"}}>
+              デモデータで試す（30名）
+            </button>
+          )}
+        </>
+      ):(
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-white font-black text-lg">{preview.length}名 プレビュー</p>
+            <button onClick={()=>setPreview(null)} className="text-xs px-3 py-2 rounded-xl font-bold" style={{color:"rgba(255,255,255,.6)",backgroundColor:"rgba(255,255,255,.1)"}}>やり直す</button>
+          </div>
+          <div className="space-y-2 mb-4" style={{maxHeight:"55vh",overflowY:"auto"}}>
+            {preview.slice(0,80).map((m,i)=>(
+              <div key={m.id} className="bg-white rounded-xl px-4 py-3 flex items-center gap-3">
+                <span className="text-xs text-gray-400 w-7 text-right shrink-0">{i+1}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-bold text-gray-800 text-sm">{m.name}</div>
+                  <div className="text-xs text-gray-400 truncate">{m.nameKana}{m.district?` · ${m.district}`:""}</div>
+                </div>
+                <span className="text-xs text-gray-300">{m.id}</span>
+              </div>
+            ))}
+            {preview.length>80&&<p className="text-center text-xs py-2" style={{color:"rgba(255,255,255,.5)"}}>ほか{preview.length-80}名</p>}
+          </div>
+          <button onClick={handleImport}
+            className="w-full py-4 rounded-2xl font-black text-white text-lg active:scale-95 transition-all"
+            style={{backgroundColor:T.gold}}>
+            この名簿でインポート（{preview.length}名）
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   DASHBOARD SCREEN
+   ================================================================ */
+function DashScreen() {
+  const {state,dispatch} = useApp();
+  const sync = useSync();
+  const [showDetail,setShowDetail] = useState(true);
+
+  const stats = useMemo(()=>{
+    const total   = state.members.length;
+    const present = state.members.filter(m=>state.statuses[m.id]===S.PRESENT).length;
+    const proxy   = state.members.filter(m=>state.statuses[m.id]===S.PROXY).length;
+    const ballot  = state.members.filter(m=>state.statuses[m.id]===S.BALLOT).length;
+    const absent  = state.members.filter(m=>state.statuses[m.id]===S.ABSENT).length;
+    const none    = total-present-proxy-ballot-absent;
+    const eff     = present+proxy+ballot;
+    const quor    = Math.ceil(total*QUORUM);
+    return {total,present,proxy,ballot,absent,none,eff,quor,ok:eff>=quor};
+  },[state.statuses,state.members]);
+
+  useEffect(()=>{
+    const id=setInterval(()=>sync(true),POLL_MS);
+    return()=>clearInterval(id);
+  },[sync]);
+
+  const BTNS=[
+    {icon:"📷",label:"QRスキャン",screen:"qr",  bg:T.navy},
+    {icon:"✋",label:"手動入力",  screen:"man", bg:T.nl},
+    {icon:"📋",label:"総代一覧",  screen:"lst", bg:T.gold},
+    {icon:"📂",label:"名簿更新",  screen:"csv", bg:"#6b7280"},
+  ];
+
+  return (
+    <div style={{backgroundColor:T.bg,minHeight:"100vh"}}>
+      {/* ヘッダー */}
+      <div className="px-5 pt-6 pb-5" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-xl font-black text-white">総代会 出席管理</h1>
+            <p className="text-xs" style={{color:"rgba(255,255,255,.5)"}}>
+              {state.user?.icon} {state.user?.name}{state.syncing?" · 同期中…":""}
+            </p>
+          </div>
+          <button onClick={()=>dispatch({type:"USER",p:null})}
+            className="text-xs px-3 py-2 rounded-xl font-bold"
+            style={{color:"rgba(255,255,255,.6)",backgroundColor:"rgba(255,255,255,.1)"}}>
+            ログアウト
+          </button>
+        </div>
+
+        {/* 定足数 */}
+        <button onClick={()=>setShowDetail(v=>!v)} className="w-full text-left">
+          <div className="rounded-2xl p-4" style={{backgroundColor:"rgba(255,255,255,.1)"}}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-white font-bold text-sm">定足数判定</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black px-3 py-1 rounded-full text-white" style={{backgroundColor:stats.ok?T.ok:T.warn}}>
+                  {stats.ok?"✓ 達成":"未達成"}
+                </span>
+                <span style={{color:"rgba(255,255,255,.4)",fontSize:11}}>{showDetail?"▲":"▼"}</span>
+              </div>
+            </div>
+            <div className="flex justify-between text-xs mb-1" style={{color:"rgba(255,255,255,.7)"}}>
+              <span>出席＋代理＋書面 {stats.eff}名</span>
+              <span>定足数 {stats.quor}名</span>
+            </div>
+            <div className="h-3 rounded-full overflow-hidden" style={{backgroundColor:"rgba(255,255,255,.2)"}}>
+              <div className="h-full rounded-full transition-all duration-700"
+                style={{width:`${stats.quor>0?Math.min(100,stats.eff/stats.quor*100):0}%`,backgroundColor:stats.ok?T.ok:T.warn}}/>
+            </div>
+            {showDetail&&(
+              <div className="grid grid-cols-5 gap-1.5 mt-3">
+                {[{l:"出席",v:stats.present,c:T.ok},{l:"代理",v:stats.proxy,c:T.nl},{l:"書面",v:stats.ballot,c:T.gold},{l:"欠席",v:stats.absent,c:"#9ca3af"},{l:"未入力",v:stats.none,c:T.warn}].map(({l,v,c})=>(
+                  <div key={l} className="text-center rounded-xl py-2" style={{backgroundColor:"rgba(255,255,255,.1)"}}>
+                    <div className="text-lg font-black" style={{color:c}}>{v}</div>
+                    <div className="text-xs opacity-60 text-white">{l}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </button>
+      </div>
+
+      {/* アクションボタン */}
+      <div className="px-5 py-5 grid grid-cols-2 gap-3">
+        {BTNS.map(({icon,label,screen,bg})=>(
+          <button key={screen} onClick={()=>dispatch({type:"SCREEN",p:screen})}
+            className="flex flex-col items-center gap-2 rounded-2xl py-5 text-white font-bold shadow-md active:scale-95 transition-all"
+            style={{backgroundColor:bg}}>
+            <span style={{fontSize:28}}>{icon}</span>
+            <span className="text-sm">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* 最近の更新 */}
+      {Object.keys(state.statuses).length>0&&(
+        <div className="px-5 pb-10">
+          <h3 className="font-black text-gray-500 text-sm mb-3">🕐 最近の更新</h3>
+          {state.members
+            .filter(m=>state.statuses[m.id])
+            .slice(-8).reverse()
+            .map(m=>{
+              const st=state.statuses[m.id];
+              const cfg=SCFG[st];
+              return (
+                <div key={m.id} className="bg-white rounded-xl px-4 py-3 flex items-center gap-3 shadow-sm mb-2">
+                  <div className="w-1.5 h-8 rounded-full shrink-0" style={{backgroundColor:cfg.dot}}/>
+                  <span className="flex-1 text-sm font-bold text-gray-700">{m.name}</span>
+                  <StatusChip status={st}/>
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   QR SCREEN
+   ================================================================ */
+function QRScreen() {
+  const {state,dispatch} = useApp();
+  const toast = useToast();
+  const [phase,setPhase]     = useState("idle"); // idle | scan | confirm | done
+  const [found,setFound]     = useState(null);
+  const [demoId,setDemoId]   = useState(state.members[0]?.id||"");
+  const [libReady,setLibReady] = useState(!!window.Html5Qrcode);
+  const scanRef = useRef(null);
+  const QR_DIV  = "qr-reader-div";
+
+  useEffect(()=>{
+    if(window.Html5Qrcode){setLibReady(true);return;}
+    const sc=document.createElement("script");
+    sc.src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js";
+    sc.onload=()=>setLibReady(true);
+    document.head.appendChild(sc);
+  },[]);
+
+  const stopScan = useCallback(async()=>{
+    if(scanRef.current){try{await scanRef.current.stop();}catch{}scanRef.current=null;}
+  },[]);
+
+  const startScan = useCallback(async()=>{
+    await stopScan();
+    const sc=new window.Html5Qrcode(QR_DIV);
+    scanRef.current=sc;
+    try{
+      await sc.start({facingMode:"environment"},{fps:10,qrbox:{width:220,height:220}},
+        text=>{
+          stopScan();
+          const m=state.members.find(x=>x.id===text);
+          if(!m){toast("一致する総代が見つかりません","error");return;}
+          setFound(m);setPhase("confirm");
+        },
+        ()=>{}
+      );
+      setPhase("scan");
+    }catch{toast("カメラを起動できませんでした","error");}
+  },[state.members,stopScan,toast]);
+
+  useEffect(()=>()=>stopScan(),[]);
+
+  const handleStatusSelect = async status=>{
+    const prev=state.statuses[found.id]||S.NONE;
+    dispatch({type:"STATUS",p:{memberId:found.id,status}});
+    if(!IS_DEMO) try{await api.updateStatus({memberId:found.id,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    toast(`✅ ${found.name}様 → ${status}`);
+    setPhase("done");
+    setTimeout(()=>{setPhase("idle");setFound(null);},2000);
+  };
+
+  const goBack=()=>{stopScan();dispatch({type:"SCREEN",p:"dash"});};
+
+  return (
+    <div className="min-h-screen px-5 pt-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <Hdr title="📷 QRスキャン" onBack={goBack}/>
+
+      {/* QRリーダーDIVは常にDOM内 */}
+      <div id={QR_DIV} style={{display:phase==="scan"?"block":"none"}} className="rounded-3xl overflow-hidden"/>
+
+      {phase==="scan"&&(
+        <button onClick={()=>{stopScan();setPhase("idle");}}
+          className="mt-4 w-full py-3 rounded-2xl font-bold text-sm text-white"
+          style={{backgroundColor:"rgba(255,255,255,.15)"}}>
+          キャンセル
+        </button>
+      )}
+
+      {phase==="idle"&&(
+        <div className="flex flex-col items-center pt-8 gap-5">
+          <div className="w-52 h-52 rounded-3xl flex items-center justify-center" style={{backgroundColor:"rgba(255,255,255,.1)",fontSize:80}}>📷</div>
+          {IS_DEMO?(
+            <div className="w-full space-y-3">
+              <p className="text-center text-sm" style={{color:"rgba(255,255,255,.6)"}}>デモ：総代を選択してシミュレート</p>
+              <select value={demoId} onChange={e=>setDemoId(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none">
+                {state.members.map(m=><option key={m.id} value={m.id}>{m.name}（{m.id}）</option>)}
+              </select>
+              <button onClick={()=>{const m=state.members.find(x=>x.id===demoId);if(m){setFound(m);setPhase("confirm");}}}
+                className="w-full py-4 rounded-2xl font-bold text-white active:scale-95 transition-all"
+                style={{backgroundColor:T.gold}}>
+                この総代を受付する
+              </button>
+            </div>
+          ):libReady?(
+            <button onClick={startScan}
+              className="px-10 py-4 rounded-2xl font-bold text-white text-lg active:scale-95 transition-all"
+              style={{backgroundColor:T.gold}}>
+              スキャン開始
+            </button>
+          ):(
+            <p className="text-sm" style={{color:"rgba(255,255,255,.5)"}}>ライブラリ読込中…</p>
+          )}
+        </div>
+      )}
+
+      {phase==="confirm"&&found&&(
+        <StatusModal
+          member={found}
+          current={state.statuses[found.id]||S.NONE}
+          onClose={()=>{setPhase("idle");setFound(null);}}
+          onSelect={handleStatusSelect}
+        />
+      )}
+
+      {phase==="done"&&(
+        <div className="flex flex-col items-center pt-16 gap-4">
+          <div style={{fontSize:96}}>✅</div>
+          <p className="text-white font-black text-2xl">登録完了！</p>
+          <StatusChip status={state.statuses[found?.id]} size="lg"/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   MANUAL SCREEN（手動入力：一覧から検索して選択）
+   ================================================================ */
+function ManualScreen() {
+  const {state,dispatch} = useApp();
+  const toast = useToast();
+  const [sel,setSel] = useState(null);
+
+  const handleStatusSelect = async status=>{
+    dispatch({type:"STATUS",p:{memberId:sel.id,status}});
+    if(!IS_DEMO) try{await api.updateStatus({memberId:sel.id,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    toast(`✅ ${sel.name}様 → ${status}`);
+    setSel(null);
+  };
+
+  return (
+    <div className="min-h-screen px-5 pt-6" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <Hdr title="✋ 手動入力" onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
+      <MemberList onSelect={setSel}/>
+      {sel&&(
+        <StatusModal
+          member={sel}
+          current={state.statuses[sel.id]||S.NONE}
+          onClose={()=>setSel(null)}
+          onSelect={handleStatusSelect}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   LIST SCREEN（総代一覧：ステータス確認・絞り込み）
+   ================================================================ */
+function ListScreen() {
+  const {state,dispatch} = useApp();
+  const toast = useToast();
+  const [filter,setFilter] = useState("all");
+  const [sel,setSel] = useState(null);
+  const [q,setQ] = useState("");
+
+  const statusOf = id=>state.statuses[id]||S.NONE;
+
+  const stats = useMemo(()=>{
+    const total   = state.members.length;
+    const present = state.members.filter(m=>state.statuses[m.id]===S.PRESENT).length;
+    const proxy   = state.members.filter(m=>state.statuses[m.id]===S.PROXY).length;
+    const ballot  = state.members.filter(m=>state.statuses[m.id]===S.BALLOT).length;
+    const absent  = state.members.filter(m=>state.statuses[m.id]===S.ABSENT).length;
+    const none    = total-present-proxy-ballot-absent;
+    return {total,present,proxy,ballot,absent,none};
+  },[state.statuses,state.members]);
+
+  const list = useMemo(()=>{
+    let arr=state.members;
+    if(q) arr=arr.filter(m=>m.name.includes(q)||(m.nameKana||"").includes(q)||(m.district||"").includes(q));
+    if(filter!=="all"){
+      const sMap={none:S.NONE,present:S.PRESENT,proxy:S.PROXY,ballot:S.BALLOT,absent:S.ABSENT};
+      arr=arr.filter(m=>statusOf(m.id)===sMap[filter]);
+    }
+    return arr;
+  },[state.members,state.statuses,q,filter]);
+
+  const handleStatusSelect = async status=>{
+    dispatch({type:"STATUS",p:{memberId:sel.id,status}});
+    if(!IS_DEMO) try{await api.updateStatus({memberId:sel.id,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    toast(`${sel.name}様 → ${status}`);
+    setSel(null);
+  };
+
+  const TABS=[
+    {k:"all",    label:"全員",  count:stats.total},
+    {k:"none",   label:"未入力",count:stats.none},
+    {k:"present",label:"出席", count:stats.present},
+    {k:"proxy",  label:"代理", count:stats.proxy},
+    {k:"ballot", label:"書面", count:stats.ballot},
+    {k:"absent", label:"欠席", count:stats.absent},
+  ];
+
+  return (
+    <div className="min-h-screen" style={{backgroundColor:T.bg}}>
+      <div className="px-5 pt-6 pb-4" style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+        <Hdr title="📋 総代一覧" onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="氏名・カナ・地区で検索"
+            className="w-full pl-9 pr-4 py-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none"/>
+          {q&&<button onClick={()=>setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 text-lg">×</button>}
+        </div>
+      </div>
+
+      {/* フィルタタブ */}
+      <div className="px-4 py-3 flex gap-2 overflow-x-auto" style={{scrollbarWidth:"none"}}>
+        {TABS.map(({k,label,count})=>(
+          <button key={k} onClick={()=>setFilter(k)}
+            className="whitespace-nowrap text-xs font-bold px-3 py-1.5 rounded-full transition-all shrink-0"
+            style={{backgroundColor:filter===k?T.navy:"#fff",color:filter===k?"#fff":"#6b7280",border:filter===k?"none":"1px solid #e5e7eb"}}>
+            {label} <span style={{opacity:.7}}>{count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* 一覧 */}
+      <div className="px-4 pb-10 space-y-2">
+        {!list.length&&<p className="text-center py-16 text-gray-400 text-sm">該当なし</p>}
+        {list.map(m=>{
+          const st=statusOf(m.id);
+          return (
+            <button key={m.id} onClick={()=>setSel(m)}
+              className="w-full flex items-center gap-3 bg-white rounded-2xl px-4 py-3.5 shadow-sm active:bg-gray-50 transition-all text-left">
+              <div className="w-1.5 h-10 rounded-full shrink-0" style={{backgroundColor:SCFG[st].dot}}/>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-gray-800">{m.name}</div>
+                <div className="text-xs text-gray-400 truncate">{m.nameKana}{m.district?` · ${m.district}`:""}</div>
+              </div>
+              <StatusChip status={st}/>
+            </button>
+          );
+        })}
+      </div>
+
+      {sel&&(
+        <StatusModal
+          member={sel}
+          current={statusOf(sel.id)}
+          onClose={()=>setSel(null)}
+          onSelect={handleStatusSelect}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================================================================
+   APP ROOT
+   ================================================================ */
+const SCREENS={login:LoginScreen,csv:CsvScreen,dash:DashScreen,qr:QRScreen,man:ManualScreen,lst:ListScreen};
+
+function App() {
+  const [state,dispatch]=useReducer(reducer,INIT);
+  const Screen=SCREENS[state.screen]||LoginScreen;
+  return (
+    <Ctx.Provider value={{state,dispatch}}>
+      <Toast t={state.toast}/>
+      <Screen/>
+    </Ctx.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
