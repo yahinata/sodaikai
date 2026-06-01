@@ -35,7 +35,7 @@ const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,us
 /* ================================================================
    CONFIG & CONSTANTS
    ================================================================ */
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
+const GAS_URL = "YOUR_GAS_URL_HERE";
 const IS_DEMO = GAS_URL === "YOUR_GAS_URL_HERE";
 const POLL_MS = 10000;
 const QUORUM  = 0.5;
@@ -176,12 +176,17 @@ const useApp = () => useContext(Ctx);
 function useRole() {
   const {state} = useApp();
   return useMemo(()=>{
-    const branch = state.user?.branch || "";
-    const branches = [...new Set(state.members.map(m=>m.branch).filter(Boolean))];
-    const isAdmin = !branch || !branches.includes(branch);
-    const visibleMembers = isAdmin ? state.members : state.members.filter(m=>m.branch===branch);
-    const myArea = isAdmin ? "" : (state.members.find(m=>m.branch===branch)?.area || "");
-    return {isAdmin, myBranch:branch, myArea, visibleMembers};
+    const userName = state.user?.name || "";
+    // 総代マスタの district（またはbranch）列とユーザー名が一致したら同一支店扱い
+    const districtOf = m => m.district || m.branch || "";
+    const allDistricts = [...new Set(state.members.map(districtOf).filter(Boolean))];
+    const isAdmin = !userName || !allDistricts.includes(userName);
+    const myBranch = isAdmin ? "" : userName;
+    const visibleMembers = isAdmin
+      ? state.members
+      : state.members.filter(m => districtOf(m) === userName);
+    const myArea = isAdmin ? "" : (state.members.find(m=>districtOf(m)===userName)?.area || "");
+    return {isAdmin, myBranch, myArea, visibleMembers};
   },[state.user, state.members]);
 }
 
