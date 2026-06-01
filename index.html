@@ -29,7 +29,7 @@
 const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext}=React;
 
 /* ── CONFIG ── */
-const GAS_URL="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
+const GAS_URL="YOUR_GAS_URL_HERE";
 const IS_DEMO=GAS_URL==="YOUR_GAS_URL_HERE";
 const POLL_MS=10000;
 const QUORUM=0.5;
@@ -693,21 +693,57 @@ function QrReader({members,onFound,onError}){
 /* ── QR SCREEN ── */
 function QRScreen(){
   const{state,dispatch}=useApp();
-  const{visibleMembers}=useRole();
+  const{visibleMembers,visibleAssoc}=useRole();
   const toast=useToast();
   const[phase,setPhase]=useState("idle");
-  const[found,setFound]=useState(null);
-  const[demoId,setDemoId]=useState(visibleMembers[0]?.id||"");
-  const handleFound=m=>{setFound(m);setPhase("confirm");};
+  const[found,setFound]=useState(null);      // {member, isAssoc}
+  const[demoId,setDemoId]=useState("");
+  const[demoIsAssoc,setDemoIsAssoc]=useState(false);
+
+  // 総代＋准組合員を1つのリストにまとめてQR検索する
+  const allVisible=useMemo(()=>[
+    ...visibleMembers.map(m=>({...m,_isAssoc:false})),
+    ...visibleAssoc.map(m=>({...m,_isAssoc:true})),
+  ],[visibleMembers,visibleAssoc]);
+
+  // デモ用の初期選択
+  useEffect(()=>{
+    if(allVisible.length>0){setDemoId(allVisible[0].id);setDemoIsAssoc(allVisible[0]._isAssoc||false);}
+  },[allVisible.length]);
+
+  const handleFound=m=>{setFound({member:m,isAssoc:m._isAssoc});setPhase("confirm");};
   const handleError=msg=>{toast(msg,"error");setPhase("idle");};
+
   const handleStatusSelect=async(status,proxyName)=>{
     if(!status||status===S.NONE)return;
-    dispatch({type:"STATUS",p:{memberId:found.id,status}});
-    if(!IS_DEMO)try{await api.updateStatus({memberId:found.id,memberName:found.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
-    toast(`✅ ${found.name}様 → ${status}`);
+    const{member,isAssoc}=found;
+    if(isAssoc){
+      dispatch({type:"ASSOC_STATUS",p:{memberId:member.id,status}});
+      if(!IS_DEMO)try{await api.updateAssocStatus({memberId:member.id,memberName:member.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    }else{
+      dispatch({type:"STATUS",p:{memberId:member.id,status}});
+      if(!IS_DEMO)try{await api.updateStatus({memberId:member.id,memberName:member.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    }
+    toast(`✅ ${member.name}様 → ${status}`);
     setPhase("done");
     setTimeout(()=>{setPhase("idle");setFound(null);},2200);
   };
+
+  // 完了画面用のステータス取得
+  const doneStatus=found
+    ? (found.isAssoc?state.assocStatuses[found.member.id]:state.statuses[found.member.id])||S.NONE
+    : S.NONE;
+
+  // デモ用ドロップダウン選択ハンドラ
+  const handleDemoChange=e=>{
+    const m=allVisible.find(x=>x.id===e.target.value);
+    if(m){setDemoId(m.id);setDemoIsAssoc(m._isAssoc||false);}
+  };
+  const handleDemoSelect=()=>{
+    const m=allVisible.find(x=>x.id===demoId);
+    if(m){setFound({member:m,isAssoc:m._isAssoc||false});setPhase("confirm");}
+  };
+
   return(
     <div className="min-h-screen px-5 pt-6"style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
       <Hdr title="📷 QRスキャン"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
@@ -717,10 +753,19 @@ function QRScreen(){
           {IS_DEMO?(
             <div className="w-full space-y-3">
               <p className="text-center text-sm"style={{color:"rgba(255,255,255,.6)"}}>デモ：総代を選択してシミュレート</p>
-              <select value={demoId}onChange={e=>setDemoId(e.target.value)}className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none">
-                {visibleMembers.map(m=><option key={m.id}value={m.id}>{m.name}（{m.id}）</option>)}
+              <select value={demoId}onChange={handleDemoChange}className="w-full px-4 py-3 rounded-xl text-sm focus:outline-none">
+                <optgroup label="総代">
+                  {visibleMembers.map(m=><option key={m.id}value={m.id}>{m.name}（{m.id}）</option>)}
+                </optgroup>
+                {visibleAssoc.length>0&&(
+                  <optgroup label="准組合員総代">
+                    {visibleAssoc.map(m=><option key={m.id}value={m.id}>{m.name}（{m.id}）准</option>)}
+                  </optgroup>
+                )}
               </select>
-              <button onClick={()=>{const m=visibleMembers.find(x=>x.id===demoId);if(m){setFound(m);setPhase("confirm");}}}className="w-full py-4 rounded-2xl font-bold text-white active:scale-95 transition-all"style={{backgroundColor:T.gold}}>この総代を受付する</button>
+              <button onClick={handleDemoSelect}className="w-full py-4 rounded-2xl font-bold text-white active:scale-95 transition-all"style={{backgroundColor:demoIsAssoc?T.teal:T.gold}}>
+                {demoIsAssoc?"この准組合員総代を受付する":"この総代を受付する"}
+              </button>
             </div>
           ):(
             <button onClick={()=>setPhase("scan")}className="px-10 py-4 rounded-2xl font-bold text-white text-lg active:scale-95 transition-all"style={{backgroundColor:T.gold}}>スキャン開始</button>
@@ -729,16 +774,24 @@ function QRScreen(){
       )}
       {phase==="scan"&&(
         <div>
-          <QrReader members={visibleMembers}onFound={handleFound}onError={handleError}/>
+          <QrReader members={allVisible}onFound={handleFound}onError={handleError}/>
           <button onClick={()=>setPhase("idle")}className="mt-4 w-full py-3 rounded-2xl font-bold text-sm text-white"style={{backgroundColor:"rgba(255,255,255,.15)"}}>キャンセル</button>
         </div>
       )}
-      {phase==="confirm"&&found&&<StatusModal member={found}current={state.statuses[found.id]||S.NONE}onClose={()=>{setPhase("idle");setFound(null);}}onSelect={handleStatusSelect}/>}
+      {phase==="confirm"&&found&&(
+        <StatusModal
+          member={found.member}
+          current={found.isAssoc?(state.assocStatuses[found.member.id]||S.NONE):(state.statuses[found.member.id]||S.NONE)}
+          assoc={found.isAssoc}
+          onClose={()=>{setPhase("idle");setFound(null);}}
+          onSelect={handleStatusSelect}/>
+      )}
       {phase==="done"&&(
         <div className="flex flex-col items-center pt-16 gap-4">
           <div style={{fontSize:96}}>✅</div>
           <p className="text-white font-black text-2xl">登録完了！</p>
-          <StatusChip status={state.statuses[found?.id]}size="lg"/>
+          {found&&<p className="text-white text-sm opacity-70">{found.isAssoc?"准組合員総代":"総代"}</p>}
+          <StatusChip status={doneStatus}size="lg"/>
         </div>
       )}
     </div>
@@ -748,20 +801,119 @@ function QRScreen(){
 /* ── MANUAL SCREEN ── */
 function ManualScreen(){
   const{state,dispatch}=useApp();
-  const{visibleMembers}=useRole();
+  const{visibleMembers,visibleAssoc}=useRole();
   const toast=useToast();
+  const[tab,setTab]=useState("members");
   const[sel,setSel]=useState(null);
+  const isAssoc=tab==="assoc";
+
   const handleStatusSelect=async(status,proxyName)=>{
     if(!status||status===S.NONE){toast("ステータスを選択してください","warn");return;}
-    dispatch({type:"STATUS",p:{memberId:sel.id,status}});
-    if(!IS_DEMO)try{await api.updateStatus({memberId:sel.id,memberName:sel.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    if(isAssoc){
+      dispatch({type:"ASSOC_STATUS",p:{memberId:sel.id,status}});
+      if(!IS_DEMO)try{await api.updateAssocStatus({memberId:sel.id,memberName:sel.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    }else{
+      dispatch({type:"STATUS",p:{memberId:sel.id,status}});
+      if(!IS_DEMO)try{await api.updateStatus({memberId:sel.id,memberName:sel.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+    }
     toast(`✅ ${sel.name}様 → ${status}`);setSel(null);
   };
+
+  const currentStatus=sel
+    ? (isAssoc?state.assocStatuses[sel.id]:state.statuses[sel.id])||S.NONE
+    : S.NONE;
+
   return(
     <div className="min-h-screen px-5 pt-6"style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
       <Hdr title="✋ 手動入力"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
-      <MemberList members={visibleMembers}onSelect={setSel}/>
-      {sel&&<StatusModal member={sel}current={state.statuses[sel.id]||S.NONE}onClose={()=>setSel(null)}onSelect={handleStatusSelect}/>}
+      {/* タブ切り替え */}
+      <div className="flex gap-2 mb-4">
+        {[{k:"members",l:"総代"},{k:"assoc",l:"准組合員総代"}].map(({k,l})=>(
+          <button key={k}onClick={()=>{setTab(k);setSel(null);}}
+            className="flex-1 py-2.5 rounded-xl font-bold text-sm transition-all"
+            style={{backgroundColor:tab===k?"#fff":"rgba(255,255,255,.15)",color:tab===k?T.navy:"rgba(255,255,255,.8)"}}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <MemberList members={isAssoc?visibleAssoc:visibleMembers}onSelect={setSel}/>
+      {sel&&(
+        <StatusModal
+          member={sel}
+          current={currentStatus}
+          assoc={isAssoc}
+          onClose={()=>setSel(null)}
+          onSelect={handleStatusSelect}/>
+      )}
+    </div>
+  );
+}
+
+/* ── MEMBER DETAIL MODAL（総代一覧用） ── */
+function MemberDetailModal({member, status, isAssoc, onClose, onChangeStatus}){
+  const cfg=SCFG[status]||SCFG[S.NONE];
+  const hasPhone=member.tel&&member.tel.trim()!=="";
+  return(
+    <div className="fixed inset-0 z-40 flex items-end"onClick={onClose}style={{backgroundColor:"rgba(0,0,0,.6)"}}>
+      <div className="modal-inner w-full rounded-t-3xl pt-6 pb-10 px-5"style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}}onClick={e=>e.stopPropagation()}>
+        {/* ヘッダー */}
+        <div className="flex items-start justify-between mb-5">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <p className="font-black text-2xl text-gray-800">{member.name}</p>
+              {isAssoc&&<span className="text-xs font-bold px-2 py-0.5 rounded-full text-white"style={{backgroundColor:T.teal}}>准組合員</span>}
+            </div>
+            <p className="text-sm text-gray-400">{member.nameKana}</p>
+          </div>
+          <button onClick={onClose}className="text-gray-300 text-3xl leading-none ml-3">×</button>
+        </div>
+
+        {/* 情報カード */}
+        <div className="space-y-3 mb-5">
+          {/* ステータス */}
+          <div className="flex items-center justify-between bg-gray-50 rounded-2xl px-4 py-3">
+            <span className="text-sm font-bold text-gray-500">出席ステータス</span>
+            <StatusChip status={status}size="xl"/>
+          </div>
+          {/* 支店・エリア */}
+          {(member.district||member.branch)&&(
+            <div className="flex items-center justify-between bg-gray-50 rounded-2xl px-4 py-3">
+              <span className="text-sm font-bold text-gray-500">支店</span>
+              <div className="text-right">
+                <p className="text-sm font-black text-gray-800">{member.district||member.branch}</p>
+                {member.area&&<p className="text-xs text-gray-400">{member.area}</p>}
+              </div>
+            </div>
+          )}
+          {/* ID */}
+          <div className="flex items-center justify-between bg-gray-50 rounded-2xl px-4 py-3">
+            <span className="text-sm font-bold text-gray-500">組合員コード</span>
+            <span className="text-sm font-black text-gray-800 font-mono">{member.id}</span>
+          </div>
+          {/* 電話番号 */}
+          {hasPhone?(
+            <a href={`tel:${member.tel}`}className="flex items-center justify-between rounded-2xl px-4 py-3 active:opacity-70 transition-all"style={{backgroundColor:"#ecfdf5"}}>
+              <span className="text-sm font-bold"style={{color:T.ok}}>電話番号</span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-black"style={{color:T.ok}}>{member.tel}</span>
+                <span className="text-lg">📞</span>
+              </div>
+            </a>
+          ):(
+            <div className="flex items-center justify-between bg-gray-50 rounded-2xl px-4 py-3">
+              <span className="text-sm font-bold text-gray-400">電話番号</span>
+              <span className="text-sm text-gray-300">未登録</span>
+            </div>
+          )}
+        </div>
+
+        {/* ステータス変更ボタン */}
+        <button onClick={onChangeStatus}
+          className="w-full py-4 rounded-2xl font-black text-white text-base transition-all active:scale-95"
+          style={{backgroundColor:cfg.bg===SCFG[S.NONE].bg?T.navy:cfg.bg}}>
+          ステータスを変更する
+        </button>
+      </div>
     </div>
   );
 }
@@ -773,7 +925,8 @@ function ListScreen(){
   const toast=useToast();
   const[tab,setTab]=useState("members");
   const[filter,setFilter]=useState("all");
-  const[sel,setSel]=useState(null);
+  const[sel,setSel]=useState(null);        // 詳細モーダル用
+  const[changing,setChanging]=useState(null); // ステータス変更モーダル用
   const[q,setQ]=useState("");
   const isAssocTab=tab==="assoc";
   const baseMembers=isAssocTab?visibleAssoc:visibleMembers;
@@ -797,17 +950,20 @@ function ListScreen(){
     }
     return arr;
   },[baseMembers,baseStatuses,q,filter]);
+
   const handleStatusSelect=async(status,proxyName)=>{
     if(!status||status===S.NONE){toast("ステータスを選択してください","warn");return;}
     if(isAssocTab){
-      dispatch({type:"ASSOC_STATUS",p:{memberId:sel.id,status}});
-      if(!IS_DEMO)try{await api.updateAssocStatus({memberId:sel.id,memberName:sel.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+      dispatch({type:"ASSOC_STATUS",p:{memberId:changing.id,status}});
+      if(!IS_DEMO)try{await api.updateAssocStatus({memberId:changing.id,memberName:changing.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
     }else{
-      dispatch({type:"STATUS",p:{memberId:sel.id,status}});
-      if(!IS_DEMO)try{await api.updateStatus({memberId:sel.id,memberName:sel.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
+      dispatch({type:"STATUS",p:{memberId:changing.id,status}});
+      if(!IS_DEMO)try{await api.updateStatus({memberId:changing.id,memberName:changing.name,status,proxyName:proxyName||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}
     }
-    toast(`${sel.name}様 → ${status}`);setSel(null);
+    toast(`${changing.name}様 → ${status}`);
+    setChanging(null);setSel(null);
   };
+
   const TABS=[
     {k:"all",    label:"全員",  count:stats.total},
     {k:"none",   label:"未入力",count:stats.none},
@@ -821,7 +977,7 @@ function ListScreen(){
         <Hdr title="📋 総代一覧"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
         <div className="flex gap-2 mb-3">
           {[{k:"members",l:"総代"},{k:"assoc",l:"准組合員総代"}].map(({k,l})=>(
-            <button key={k}onClick={()=>{setTab(k);setFilter("all");setQ("");}}className="flex-1 py-2 rounded-xl font-bold text-sm transition-all"style={{backgroundColor:tab===k?"#fff":"rgba(255,255,255,.15)",color:tab===k?T.navy:"rgba(255,255,255,.8)"}}>
+            <button key={k}onClick={()=>{setTab(k);setFilter("all");setQ("");setSel(null);}}className="flex-1 py-2 rounded-xl font-bold text-sm transition-all"style={{backgroundColor:tab===k?"#fff":"rgba(255,255,255,.15)",color:tab===k?T.navy:"rgba(255,255,255,.8)"}}>
               {l}
             </button>
           ))}
@@ -854,13 +1010,35 @@ function ListScreen(){
                     {isAssocTab&&<span className="ml-1 font-bold"style={{color:T.teal}}>准</span>}
                   </div>
                 </div>
-                <StatusChip status={st}size="xl"/>
+                <div className="flex items-center gap-2 shrink-0">
+                  <StatusChip status={st}size="xl"/>
+                  <span className="text-gray-300 text-lg">›</span>
+                </div>
               </button>
             );
           })}
         </div>
       </div>
-      {sel&&<StatusModal member={sel}current={statusOf(sel.id)}assoc={isAssocTab}onClose={()=>setSel(null)}onSelect={handleStatusSelect}/>}
+
+      {/* 詳細モーダル */}
+      {sel&&!changing&&(
+        <MemberDetailModal
+          member={sel}
+          status={statusOf(sel.id)}
+          isAssoc={isAssocTab}
+          onClose={()=>setSel(null)}
+          onChangeStatus={()=>setChanging(sel)}/>
+      )}
+
+      {/* ステータス変更モーダル */}
+      {changing&&(
+        <StatusModal
+          member={changing}
+          current={statusOf(changing.id)}
+          assoc={isAssocTab}
+          onClose={()=>setChanging(null)}
+          onSelect={handleStatusSelect}/>
+      )}
     </div>
   );
 }
