@@ -29,7 +29,7 @@
 const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext}=React;
 
 /* ── CONFIG ── */
-const GAS_URL="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
+const GAS_URL="YOUR_GAS_URL_HERE";
 const IS_DEMO=GAS_URL==="YOUR_GAS_URL_HERE";
 const POLL_MS=10000;
 const QUORUM=0.5;
@@ -44,7 +44,7 @@ const SCFG={
 };
 
 /* ── DEMO DATA ── */
-const _BR=[{d:"test支店",a:"彦根センター管内"},{d:"test1支店",a:"彦根センター管内"},{d:"test支店",a:"草津センター管内"},{d:"test支店",a:"草津センター管内"},{d:"test支店",a:"甲賀センター管内"}];
+const _BR=[{d:"彦根支店",a:"彦根センター管内"},{d:"長浜支店",a:"彦根センター管内"},{d:"草津支店",a:"草津センター管内"},{d:"大津支店",a:"草津センター管内"},{d:"甲賀支店",a:"甲賀センター管内"}];
 const _N=[["鈴木一郎","スズキ イチロウ"],["田中義雄","タナカ ヨシオ"],["渡辺幸子","ワタナベ サチコ"],["山本健一","ヤマモト ケンイチ"],["伊藤美智子","イトウ ミチコ"],["中村正夫","ナカムラ マサオ"],["小林和子","コバヤシ カズコ"],["加藤達也","カトウ タツヤ"],["吉田悦子","ヨシダ エツコ"],["松本浩司","マツモト コウジ"]];
 const DEMO_MEMBERS=Array.from({length:30},(_,i)=>({id:`M${String(i+1).padStart(3,"0")}`,name:_N[i%10][0],nameKana:_N[i%10][1],district:_BR[i%5].d,area:_BR[i%5].a}));
 const _AN=[["佐々木花子","ササキ ハナコ"],["高橋一郎","タカハシ イチロウ"],["山田幸子","ヤマダ サチコ"],["小川健二","オガワ ケンジ"],["木村美穂","キムラ ミホ"]];
@@ -53,6 +53,26 @@ const DEMO_USERS=[{id:"u1",name:"彦根支店",icon:"🌸"},{id:"u2",name:"長�
 const DEMO_AGENDAS=[{id:"A1",title:"第1号議案：令和5年度事業報告承認の件",type:"普通決議"},{id:"A2",title:"第2号議案：令和5年度決算承認の件",type:"普通決議"},{id:"A3",title:"第3号議案：役員選任の件",type:"特別決議"}];
 
 /* ── CSV ── */
+/* ── フリガナ検証：カタカナ・ひらがな・スペース以外が含まれる場合を検出 ── */
+function isKana(s){
+  if(!s||!s.trim())return true;
+  // カタカナ・ひらがな・長音・中黒・スペース（全角半角）のみ許可
+  return /^[\u30A0-\u30FF\u3040-\u309F\u30FC\u30FB\uFF65\u3000\s]+$/.test(s.trim());
+}
+// フリガナ表示用コンポーネント（問題あれば警告アイコン付き）
+function KanaText({value, className=""}){
+  if(!value) return <span className={className}></span>;
+  if(!isKana(value)){
+    return(
+      <span className={className} title={`フリガナに非カナ文字が含まれています: "${value}"`}>
+        <span style={{color:T.warn}}>⚠</span>
+        <span style={{color:T.ng,fontWeight:700}}>{value}</span>
+      </span>
+    );
+  }
+  return <span className={className}>{value}</span>;
+}
+
 function parseCsv(text){
   const lines=text.trim().split(/\r?\n/).filter(Boolean);
   if(!lines.length)return[];
@@ -194,7 +214,8 @@ function StatusModal({member,current,onClose,onSelect,assoc=false}){
         <div className="flex items-start justify-between mb-4">
           <div>
             <p className="font-black text-2xl text-gray-800">{member.name}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{member.nameKana}{member.district?` · ${member.district}`:""}{assoc&&<span className="ml-1 font-bold"style={{color:T.teal}}>准組合員</span>}</p>
+            <p className="text-xs text-gray-400 mt-0.5"><KanaText value={member.nameKana}/>{member.district?` · ${member.district}`:""}
+            {assoc&&<span className="ml-1 font-bold"style={{color:T.teal}}>准組合員</span>}</p>
             <div className="mt-2 flex items-center gap-2"><span className="text-xs text-gray-400">現在：</span><StatusChip status={current}size="lg"/></div>
           </div>
           <button onClick={onClose}className="text-gray-300 text-3xl leading-none">×</button>
@@ -259,7 +280,7 @@ function MemberList({members,onSelect}){
             <button key={m.id}onClick={()=>onSelect(m)}className="w-full text-left bg-white rounded-2xl px-4 py-4 flex items-center gap-3 shadow-sm active:scale-98 transition-all"style={{borderLeft:`5px solid ${cfg.dot}`}}>
               <div className="flex-1 min-w-0">
                 <div className="font-black text-gray-800 text-base">{m.name}</div>
-                <div className="text-xs text-gray-400 mt-0.5">{m.nameKana}{m.district?` · ${m.district}`:""}{m.area?` (${m.area})`:""}</div>
+                <div className="text-xs text-gray-400 mt-0.5"><KanaText value={m.nameKana}/>{m.district?` · ${m.district}`:""}{m.area?` (${m.area})`:""}</div>
               </div>
               <StatusChip status={st}size="xl"/>
             </button>
@@ -539,7 +560,7 @@ function CsvScreen(){
                 <span className="text-xs text-gray-400 w-7 text-right shrink-0">{i+1}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-gray-800 text-sm">{m.name}</div>
-                  <div className="text-xs text-gray-400 truncate">{m.nameKana}{m.district?` · ${m.district}`:""}</div>
+                  <div className="text-xs text-gray-400 truncate"><KanaText value={m.nameKana}/>{m.district?` · ${m.district}`:""}</div>
                 </div>
                 <span className="text-xs text-gray-300">{m.id}</span>
               </div>
@@ -559,6 +580,7 @@ function DashScreen(){
   const sync=useSync();
   const{isAdmin,myBranch,myArea,visibleMembers,visibleAssoc}=useRole();
   const allBranches=useMemo(()=>[...new Set(state.members.map(m=>m.district||m.branch).filter(Boolean))],[state.members]);
+  const[showDownload,setShowDownload]=useState(false);
   useEffect(()=>{const id=setInterval(()=>sync(true),POLL_MS);return()=>clearInterval(id);},[sync]);
   const BTNS=[{icon:"📷",label:"QRスキャン",screen:"qr",bg:T.navy},{icon:"✋",label:"手動入力",screen:"man",bg:T.nl},{icon:"📋",label:"総代一覧",screen:"lst",bg:T.gold},{icon:"📂",label:"名簿更新",screen:"csv",bg:"#6b7280"}];
   const recentUpdates=useMemo(()=>(isAdmin?state.members:visibleMembers).filter(m=>state.statuses[m.id]).slice(-12).reverse(),[state.members,visibleMembers,state.statuses,isAdmin]);
@@ -635,13 +657,26 @@ function DashScreen(){
       </div>
 
       {/* アクションボタン */}
-      <div className="px-5 sm:px-8 py-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="px-5 sm:px-8 pt-5 pb-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
         {BTNS.map(({icon,label,screen,bg})=>(
           <button key={screen}onClick={()=>dispatch({type:"SCREEN",p:screen})}className="flex flex-col items-center gap-2 rounded-2xl py-5 sm:py-6 text-white font-bold shadow-md active:scale-95 transition-all"style={{backgroundColor:bg}}>
             <span style={{fontSize:32}}>{icon}</span>
             <span className="text-sm sm:text-base">{label}</span>
           </button>
         ))}
+      </div>
+
+      {/* CSVダウンロードボタン */}
+      <div className="px-5 sm:px-8 pb-4">
+        <button onClick={()=>setShowDownload(true)}
+          className="w-full py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all"
+          style={{backgroundColor:"#fff",color:T.navy,border:`2px solid ${T.navy}`}}>
+          <span>📥</span>
+          <span>出席データをCSVダウンロード</span>
+          <span className="ml-auto text-xs px-2 py-0.5 rounded-full text-white"style={{backgroundColor:T.navy}}>
+            {isAdmin?"全体":myBranch}
+          </span>
+        </button>
       </div>
 
       {/* 最近の更新（総代名＋支店名） */}
@@ -664,6 +699,7 @@ function DashScreen(){
           </div>
         </div>
       )}
+      {showDownload&&<DownloadModal onClose={()=>setShowDownload(false)}/>}
     </div>
   );
 }
@@ -849,6 +885,85 @@ function ManualScreen(){
   );
 }
 
+/* ── CSV DOWNLOAD ── */
+function downloadCsv(filename, headers, rows){
+  const BOM='\uFEFF';
+  const esc=v=>{const s=String(v??'');return(s.includes(',')||s.includes('"')||s.includes('\n'))?`"${s.replace(/"/g,'""')}"`:s;};
+  const content=BOM+[headers,...rows].map(r=>r.map(esc).join(',')).join('\n');
+  const blob=new Blob([content],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=filename;a.click();
+  URL.revokeObjectURL(url);
+}
+
+function DownloadModal({onClose}){
+  const{state}=useApp();
+  const{isAdmin,myBranch,visibleMembers,visibleAssoc}=useRole();
+  const toast=useToast();
+  const today=new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}).replace(/\//g,'');
+  const label=isAdmin?'全体':myBranch;
+
+  const dlMembers=()=>{
+    const members=isAdmin?state.members:visibleMembers;
+    if(!members.length){toast("ダウンロードするデータがありません","warn");return;}
+    const headers=['組合員コード','氏名','フリガナ','支店名','エリア','電話番号','ステータス'];
+    const rows=members.map(m=>[m.id,m.name,m.nameKana||'',m.district||m.branch||'',m.area||'',m.tel||'',state.statuses[m.id]||'未入力']);
+    downloadCsv(`総代名簿_${label}_${today}.csv`,headers,rows);
+    toast('✅ 総代名簿をダウンロードしました');onClose();
+  };
+
+  const dlAssoc=()=>{
+    const members=isAdmin?state.assocMembers:visibleAssoc;
+    if(!members.length){toast("ダウンロードするデータがありません","warn");return;}
+    const headers=['組合員コード','氏名','フリガナ','支店名','エリア','電話番号','ステータス'];
+    const rows=members.map(m=>[m.id,m.name,m.nameKana||'',m.district||m.branch||'',m.area||'',m.tel||'',state.assocStatuses[m.id]||'未入力']);
+    downloadCsv(`准組合員総代名簿_${label}_${today}.csv`,headers,rows);
+    toast('✅ 准組合員総代名簿をダウンロードしました');onClose();
+  };
+
+  const dlAll=()=>{
+    const mems=isAdmin?state.members:visibleMembers;
+    const assocs=isAdmin?state.assocMembers:visibleAssoc;
+    if(!mems.length&&!assocs.length){toast("ダウンロードするデータがありません","warn");return;}
+    const headers=['組合員コード','氏名','フリガナ','支店名','エリア','電話番号','ステータス','区分'];
+    const rows=[
+      ...mems.map(m=>[m.id,m.name,m.nameKana||'',m.district||m.branch||'',m.area||'',m.tel||'',state.statuses[m.id]||'未入力','総代']),
+      ...assocs.map(m=>[m.id,m.name,m.nameKana||'',m.district||m.branch||'',m.area||'',m.tel||'',state.assocStatuses[m.id]||'未入力','准組合員総代']),
+    ];
+    downloadCsv(`出席記録_${label}_${today}.csv`,headers,rows);
+    toast('✅ 出席記録をダウンロードしました');onClose();
+  };
+
+  return(
+    <div className="fixed inset-0 z-40 flex items-end"onClick={onClose}style={{backgroundColor:"rgba(0,0,0,.6)"}}>
+      <div className="modal-inner w-full rounded-t-3xl pt-6 pb-10 px-5"style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}}onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="font-black text-xl text-gray-800">📥 CSVダウンロード</h3>
+          <button onClick={onClose}className="text-gray-300 text-3xl leading-none">×</button>
+        </div>
+        <p className="text-xs text-gray-400 mb-5">
+          {isAdmin?'全体データをダウンロードできます':`${myBranch}のデータをダウンロードできます`}
+        </p>
+        <div className="space-y-3">
+          <button onClick={dlAll}className="w-full py-4 rounded-2xl font-black text-white text-base active:scale-95 transition-all"style={{backgroundColor:T.navy}}>
+            📋 総代＋准組合員 出席記録（全項目）
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={dlMembers}className="py-3.5 rounded-2xl font-bold text-white text-sm active:scale-95 transition-all"style={{backgroundColor:T.nl}}>
+              総代のみ
+            </button>
+            <button onClick={dlAssoc}className="py-3.5 rounded-2xl font-bold text-white text-sm active:scale-95 transition-all"style={{backgroundColor:T.teal}}>
+              准組合員のみ
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 text-center mt-4">Excel で開く場合は文字化けしないよう UTF-8 BOM付きで出力されます</p>
+      </div>
+    </div>
+  );
+}
+
 /* ── MEMBER DETAIL MODAL（総代一覧用） ── */
 function MemberDetailModal({member, status, isAssoc, onClose, onChangeStatus}){
   const cfg=SCFG[status]||SCFG[S.NONE];
@@ -863,7 +978,7 @@ function MemberDetailModal({member, status, isAssoc, onClose, onChangeStatus}){
               <p className="font-black text-2xl text-gray-800">{member.name}</p>
               {isAssoc&&<span className="text-xs font-bold px-2 py-0.5 rounded-full text-white"style={{backgroundColor:T.teal}}>准組合員</span>}
             </div>
-            <p className="text-sm text-gray-400">{member.nameKana}</p>
+            <p className="text-sm text-gray-400"><KanaText value={member.nameKana}/></p>
           </div>
           <button onClick={onClose}className="text-gray-300 text-3xl leading-none ml-3">×</button>
         </div>
@@ -1005,7 +1120,7 @@ function ListScreen(){
                 <div className="flex-1 min-w-0">
                   <div className="font-black text-gray-800 text-base">{m.name}</div>
                   <div className="text-xs text-gray-400 mt-0.5">
-                    {m.nameKana}
+                    <KanaText value={m.nameKana}/>
                     {(m.district||m.branch)?` · ${m.district||m.branch}`:""}
                     {isAssocTab&&<span className="ml-1 font-bold"style={{color:T.teal}}>准</span>}
                   </div>
