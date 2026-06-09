@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
   <title>総代会 出席管理システム</title>
   <meta name="theme-color" content="#1B365D"/>
   <meta name="mobile-web-app-capable" content="yes"/>
@@ -21,6 +21,33 @@
     ::-webkit-scrollbar{width:4px;}
     ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:2px;}
     @media(min-width:640px){.modal-inner{max-width:560px !important;}}
+
+    /* iOS Safari 対応 */
+    .modal-overlay{
+      position:fixed;top:0;left:0;right:0;bottom:0;
+      z-index:40;
+      display:flex;flex-direction:column;justify-content:flex-end;
+      overflow-y:auto;
+      -webkit-overflow-scrolling:touch;
+      background:rgba(0,0,0,.6);
+    }
+    .modal-sheet{
+      width:100%;max-width:430px;margin:0 auto;
+      background:#fff;
+      border-radius:1.5rem 1.5rem 0 0;
+      padding:1.5rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom, 0px));
+      max-height:85vh;max-height:85dvh;
+      overflow-y:auto;
+      -webkit-overflow-scrolling:touch;
+    }
+    @media(min-width:640px){
+      .modal-sheet{max-width:560px;}
+    }
+    /* 古いiOSでのスクロール修正 */
+    .scroll-y{
+      overflow-y:auto;
+      -webkit-overflow-scrolling:touch;
+    }
   </style>
 </head>
 <body>
@@ -29,7 +56,7 @@
 const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext}=React;
 
 /* ── CONFIG ── */
-const GAS_URL="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
+const GAS_URL="YOUR_GAS_URL_HERE";
 const IS_DEMO=GAS_URL==="YOUR_GAS_URL_HERE";
 const POLL_MS=10000;
 const QUORUM=0.5;
@@ -209,8 +236,8 @@ function StatusModal({member,current,onClose,onSelect,assoc=false}){
   const canConfirm=sel!==null&&sel!==current&&(!needProxy||proxyName.trim().length>0);
   const selCfg=sel?SCFG[sel]:null;
   return(
-    <div className="fixed inset-0 z-40 flex items-end"onClick={onClose}style={{backgroundColor:"rgba(0,0,0,.6)"}}>
-      <div className="modal-inner w-full rounded-t-3xl pt-6 pb-8 px-5"style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}}onClick={e=>e.stopPropagation()}>
+    <div className="modal-overlay"onClick={onClose}>
+      <div className="modal-sheet"onClick={e=>e.stopPropagation()}>
         <div className="flex items-start justify-between mb-4">
           <div>
             <p className="font-black text-2xl text-gray-800">{member.name}</p>
@@ -257,10 +284,9 @@ function StatusModal({member,current,onClose,onSelect,assoc=false}){
 }
 
 /* ── MEMBER LIST ── */
-function MemberList({members,onSelect}){
-  const{state}=useApp();
+function MemberList({members, statuses, onSelect}){
   const[q,setQ]=useState("");
-  const statusOf=id=>state.statuses[id]||S.NONE;
+  const statusOf=id=>(statuses||{})[id]||S.NONE;
   const list=useMemo(()=>{
     if(!q)return members;
     return members.filter(m=>m.name.includes(q)||(m.nameKana||"").includes(q)||(m.district||"").includes(q)||(m.area||"").includes(q)||m.id.includes(q));
@@ -272,7 +298,7 @@ function MemberList({members,onSelect}){
         <input value={q}onChange={e=>setQ(e.target.value)}placeholder="氏名・カナ・支店名で検索"className="w-full pl-9 pr-9 py-3 rounded-xl bg-white border border-gray-200 text-sm focus:outline-none"/>
         {q&&<button onClick={()=>setQ("")}className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 text-lg">×</button>}
       </div>
-      <div className="space-y-2"style={{maxHeight:"65vh",overflowY:"auto"}}>
+      <div className="space-y-2 scroll-y" style={{maxHeight:"65vh"}}>
         {!list.length&&<p className="text-center py-10 text-sm"style={{color:"rgba(255,255,255,.4)"}}>該当なし</p>}
         {list.map(m=>{
           const st=statusOf(m.id);const cfg=SCFG[st];
@@ -554,7 +580,7 @@ function CsvScreen(){
             <p className="text-white font-black text-lg">{preview.length}名 プレビュー</p>
             <button onClick={()=>setPreview(null)}className="text-xs px-3 py-2 rounded-xl font-bold"style={{color:"rgba(255,255,255,.6)",backgroundColor:"rgba(255,255,255,.1)"}}>やり直す</button>
           </div>
-          <div className="space-y-2 mb-4"style={{maxHeight:"50vh",overflowY:"auto"}}>
+          <div className="space-y-2 mb-4 scroll-y"style={{maxHeight:"50vh"}}>
             {preview.slice(0,80).map((m,i)=>(
               <div key={m.id}className="bg-white rounded-xl px-4 py-3 flex items-center gap-3">
                 <span className="text-xs text-gray-400 w-7 text-right shrink-0">{i+1}</span>
@@ -614,32 +640,84 @@ function DashScreen(){
               {myArea&&<span className="text-xs"style={{color:"rgba(255,255,255,.4)"}}>/ {myArea}</span>}
             </div>
             <BranchCard members={visibleMembers}statuses={state.statuses}branchName={myBranch}areaName={myArea}/>
+            {/* 准組合員の出席状況 */}
+            {visibleAssoc.length>0&&(
+              <div className="mt-3 p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:`3px solid ${T.teal}`}}>
+                <p className="text-xs font-black mb-2"style={{color:"#5eead4"}}>准組合員（議決権なし）</p>
+                <div className="flex items-center gap-4">
+                  <div className="text-center">
+                    <div className="text-lg font-black text-white">{visibleAssoc.filter(m=>state.assocStatuses[m.id]===S.PRESENT).length}</div>
+                    <div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>出席</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-black"style={{color:"#9ca3af"}}>{visibleAssoc.filter(m=>state.assocStatuses[m.id]===S.ABSENT).length}</div>
+                    <div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>欠席</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-black"style={{color:T.warn}}>{visibleAssoc.length-visibleAssoc.filter(m=>state.assocStatuses[m.id]===S.PRESENT||state.assocStatuses[m.id]===S.ABSENT).length}</div>
+                    <div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>未入力</div>
+                  </div>
+                  <div className="flex-1 text-right">
+                    <div className="text-xs"style={{color:"rgba(255,255,255,.4)"}}>対象 {visibleAssoc.length}名</div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* 事務局: 支店別ミニカード */}
+        {/* 事務局: 支店別ミニカード（総代＋准組合員 個別表示） */}
         {isAdmin&&allBranches.length>0&&(
           <div className="rounded-2xl p-4"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:"4px solid #60a5fa"}}>
             <p className="text-xs font-black mb-3"style={{color:"#93c5fd"}}>🏢 支店別集計</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {allBranches.map(br=>{
-                const brM=state.members.filter(m=>(m.district||m.branch)===br);
-                const area=brM[0]?.area||"";
-                const eff=brM.filter(m=>[S.PRESENT,S.PROXY,S.BALLOT].includes(state.statuses[m.id])).length;
-                const total=brM.length;const quor=Math.ceil(total*QUORUM);const ok=eff>=quor;const p=total>0?Math.round(eff/total*100):0;
+                const dOf=m=>m.district||m.branch||"";
+                // 総代（正組合員）
+                const brM=state.members.filter(m=>dOf(m)===br);
+                const mEff=brM.filter(m=>[S.PRESENT,S.PROXY,S.BALLOT].includes(state.statuses[m.id])).length;
+                const mTotal=brM.length;
+                const mQuor=Math.ceil(mTotal*QUORUM);
+                const mOk=mEff>=mQuor;
+                // 准組合員
+                const brA=state.assocMembers.filter(m=>dOf(m)===br);
+                const aPresent=brA.filter(m=>state.assocStatuses[m.id]===S.PRESENT).length;
+                const aTotal=brA.length;
+                const area=brM[0]?.area||brA[0]?.area||"";
                 return(
-                  <div key={br}className="rounded-xl p-3 flex items-center gap-3"style={{backgroundColor:"rgba(255,255,255,.08)"}}>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-black text-white text-sm truncate">{br}</div>
-                      {area&&<div className="text-xs truncate"style={{color:"rgba(255,255,255,.4)"}}>{area}</div>}
-                      <div style={{height:5,borderRadius:9,overflow:"hidden",marginTop:4,backgroundColor:"rgba(255,255,255,.2)"}}>
-                        <div style={{height:"100%",borderRadius:9,width:`${Math.min(100,quor>0?eff/quor*100:0)}%`,backgroundColor:ok?T.ok:T.warn,transition:"width .7s"}}/>
+                  <div key={br}className="rounded-xl p-3"style={{backgroundColor:"rgba(255,255,255,.08)"}}>
+                    <div className="flex items-start justify-between mb-2">
+                      <div>
+                        <div className="font-black text-white text-sm">{br}</div>
+                        {area&&<div className="text-xs"style={{color:"rgba(255,255,255,.4)"}}>{area}</div>}
+                      </div>
+                      <span className="text-xs font-black px-2 py-0.5 rounded-full text-white shrink-0"
+                        style={{backgroundColor:mOk?T.ok:T.warn}}>
+                        {mOk?"✓":"—"}
+                      </span>
+                    </div>
+                    {/* 総代バー */}
+                    <div className="mb-1.5">
+                      <div className="flex justify-between mb-0.5"style={{fontSize:10}}>
+                        <span style={{color:"rgba(255,255,255,.6)"}}>総代（議決権行使）</span>
+                        <span className="font-black text-white">{mEff}<span style={{color:"rgba(255,255,255,.4)"}}> /{mTotal}</span></span>
+                      </div>
+                      <div style={{height:5,borderRadius:9,overflow:"hidden",backgroundColor:"rgba(255,255,255,.2)"}}>
+                        <div style={{height:"100%",borderRadius:9,width:`${Math.min(100,mQuor>0?mEff/mQuor*100:0)}%`,backgroundColor:mOk?T.ok:T.warn,transition:"width .7s"}}/>
                       </div>
                     </div>
-                    <div className="text-right shrink-0">
-                      <div style={{fontSize:20,fontWeight:900,color:ok?T.ok:T.warn,lineHeight:1}}>{eff}<span style={{fontSize:11}}>/{total}</span></div>
-                      <div style={{fontSize:11,color:"rgba(255,255,255,.5)"}}>{p}%</div>
-                    </div>
+                    {/* 准組合員バー */}
+                    {aTotal>0&&(
+                      <div>
+                        <div className="flex justify-between mb-0.5"style={{fontSize:10}}>
+                          <span style={{color:T.teal}}>准組合員（出席）</span>
+                          <span className="font-black"style={{color:"#5eead4"}}>{aPresent}<span style={{color:"rgba(255,255,255,.4)"}}> /{aTotal}</span></span>
+                        </div>
+                        <div style={{height:4,borderRadius:9,overflow:"hidden",backgroundColor:"rgba(255,255,255,.2)"}}>
+                          <div style={{height:"100%",borderRadius:9,width:`${aTotal>0?Math.round(aPresent/aTotal*100):0}%`,backgroundColor:T.teal,transition:"width .7s"}}/>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -751,7 +829,7 @@ function QRScreen(){
   const handleError=msg=>{toast(msg,"error");setPhase("idle");};
 
   const handleStatusSelect=async(status,proxyName)=>{
-    if(!status||status===S.NONE)return;
+    if(!status)return;
     const{member,isAssoc}=found;
     if(isAssoc){
       dispatch({type:"ASSOC_STATUS",p:{memberId:member.id,status}});
@@ -781,7 +859,8 @@ function QRScreen(){
   };
 
   return(
-    <div className="min-h-screen px-5 pt-6"style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+    <div className="scroll-y" style={{minHeight:"100vh",background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <div className="px-5 pt-6 pb-8">
       <Hdr title="📷 QRスキャン"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
       {phase==="idle"&&(
         <div className="flex flex-col items-center pt-8 gap-5">
@@ -844,7 +923,7 @@ function ManualScreen(){
   const isAssoc=tab==="assoc";
 
   const handleStatusSelect=async(status,proxyName)=>{
-    if(!status||status===S.NONE){toast("ステータスを選択してください","warn");return;}
+    if(!status){toast("ステータスを選択してください","warn");return;}
     if(isAssoc){
       dispatch({type:"ASSOC_STATUS",p:{memberId:sel.id,status}});
       if(!IS_DEMO)try{await api.updateAssocStatus({memberId:sel.id,memberName:sel.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
@@ -860,19 +939,21 @@ function ManualScreen(){
     : S.NONE;
 
   return(
-    <div className="min-h-screen px-5 pt-6"style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
-      <Hdr title="✋ 手動入力"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
-      {/* タブ切り替え */}
-      <div className="flex gap-2 mb-4">
-        {[{k:"members",l:"総代"},{k:"assoc",l:"准組合員総代"}].map(({k,l})=>(
-          <button key={k}onClick={()=>{setTab(k);setSel(null);}}
-            className="flex-1 py-2.5 rounded-xl font-bold text-sm transition-all"
-            style={{backgroundColor:tab===k?"#fff":"rgba(255,255,255,.15)",color:tab===k?T.navy:"rgba(255,255,255,.8)"}}>
-            {l}
-          </button>
-        ))}
+    <div className="scroll-y" style={{minHeight:"100vh",background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
+      <div className="px-5 pt-6 pb-8">
+        <Hdr title="✋ 手動入力"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
+        {/* タブ切り替え */}
+        <div className="flex gap-2 mb-4">
+          {[{k:"members",l:"総代"},{k:"assoc",l:"准組合員総代"}].map(({k,l})=>(
+            <button key={k}onClick={()=>{setTab(k);setSel(null);}}
+              className="flex-1 py-2.5 rounded-xl font-bold text-sm transition-all"
+              style={{backgroundColor:tab===k?"#fff":"rgba(255,255,255,.15)",color:tab===k?T.navy:"rgba(255,255,255,.8)"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <MemberList members={isAssoc?visibleAssoc:visibleMembers} statuses={isAssoc?state.assocStatuses:state.statuses} onSelect={setSel}/>
       </div>
-      <MemberList members={isAssoc?visibleAssoc:visibleMembers}onSelect={setSel}/>
       {sel&&(
         <StatusModal
           member={sel}
@@ -936,8 +1017,8 @@ function DownloadModal({onClose}){
   };
 
   return(
-    <div className="fixed inset-0 z-40 flex items-end"onClick={onClose}style={{backgroundColor:"rgba(0,0,0,.6)"}}>
-      <div className="modal-inner w-full rounded-t-3xl pt-6 pb-10 px-5"style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}}onClick={e=>e.stopPropagation()}>
+    <div className="modal-overlay"onClick={onClose}>
+      <div className="modal-sheet"onClick={e=>e.stopPropagation()}>
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-black text-xl text-gray-800">📥 CSVダウンロード</h3>
           <button onClick={onClose}className="text-gray-300 text-3xl leading-none">×</button>
@@ -969,8 +1050,8 @@ function MemberDetailModal({member, status, isAssoc, onClose, onChangeStatus}){
   const cfg=SCFG[status]||SCFG[S.NONE];
   const hasPhone=member.tel&&member.tel.trim()!=="";
   return(
-    <div className="fixed inset-0 z-40 flex items-end"onClick={onClose}style={{backgroundColor:"rgba(0,0,0,.6)"}}>
-      <div className="modal-inner w-full rounded-t-3xl pt-6 pb-10 px-5"style={{backgroundColor:"#fff",maxWidth:430,margin:"0 auto"}}onClick={e=>e.stopPropagation()}>
+    <div className="modal-overlay"onClick={onClose}>
+      <div className="modal-sheet"onClick={e=>e.stopPropagation()}>
         {/* ヘッダー */}
         <div className="flex items-start justify-between mb-5">
           <div className="flex-1">
@@ -1067,7 +1148,7 @@ function ListScreen(){
   },[baseMembers,baseStatuses,q,filter]);
 
   const handleStatusSelect=async(status,proxyName)=>{
-    if(!status||status===S.NONE){toast("ステータスを選択してください","warn");return;}
+    if(!status){toast("ステータスを選択してください","warn");return;}
     if(isAssocTab){
       dispatch({type:"ASSOC_STATUS",p:{memberId:changing.id,status}});
       if(!IS_DEMO)try{await api.updateAssocStatus({memberId:changing.id,memberName:changing.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}
@@ -1087,7 +1168,7 @@ function ListScreen(){
     {k:"absent", label:"欠席", count:stats.absent},
   ];
   return(
-    <div className="min-h-screen"style={{backgroundColor:T.bg}}>
+    <div className="scroll-y" style={{minHeight:"100vh",backgroundColor:T.bg}}>
       <div className="px-5 sm:px-8 pt-6 pb-4"style={{background:`linear-gradient(150deg,${T.nd},${T.nl})`}}>
         <Hdr title="📋 総代一覧"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
         <div className="flex gap-2 mb-3">
