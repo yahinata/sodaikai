@@ -98,19 +98,32 @@ const api={
 };
 
 /* ── STATE ── */
-const INIT={user:null,screen:"login",members:[],statuses:{},assocMembers:[],assocStatuses:{},agendas:[],users:[],loading:false,syncing:false,toast:null};
+const INIT={user:null,screen:"login",members:[],statuses:{},assocMembers:[],assocStatuses:{},agendas:[],users:[],loading:false,syncing:false,toast:null,statusLog:[]};
 function reducer(s,{type:t,p}){
   switch(t){
-    case"USER":return{...s,user:p,screen:p?"loading":"login"};
+    case"USER":return{...s,user:p,screen:p?"loading":"login",statusLog:[]};
     case"SCREEN":return{...s,screen:p};
     case"MEMBERS":return{...s,members:p,screen:"dash"};
     case"ASSOC_MEMBERS":return{...s,assocMembers:p};
-    case"SYNC":{const sc=s.screen==="loading"?(p.members?.length>0?"dash":"csv"):s.screen;return{...s,...p,syncing:false,loading:false,screen:sc};}
+    case"SYNC":{
+      const sc=s.screen==="loading"?(p.members?.length>0?"dash":"csv"):s.screen;
+      const serverLog=(p.recentLog||[]).map(r=>({memberId:r.memberId,name:r.memberName||"",status:r.status,ts:r.ts||"",isAssoc:!!r.isAssoc,operator:r.operator||""}));
+      const merged=serverLog.length>0?serverLog:s.statusLog;
+      return{...s,...p,syncing:false,loading:false,screen:sc,statusLog:merged};
+    }
     case"LOAD":return{...s,loading:p};
     case"SYNCING":return{...s,syncing:p};
     case"TOAST":return{...s,toast:p};
-    case"STATUS":{const n={...s.statuses};if(p.status===S.NONE)delete n[p.memberId];else n[p.memberId]=p.status;return{...s,statuses:n};}
-    case"ASSOC_STATUS":{const n={...s.assocStatuses};if(p.status===S.NONE)delete n[p.memberId];else n[p.memberId]=p.status;return{...s,assocStatuses:n};}
+    case"STATUS":{
+      const n={...s.statuses};if(p.status===S.NONE)delete n[p.memberId];else n[p.memberId]=p.status;
+      const entry={memberId:p.memberId,name:p.name||"",status:p.status,ts:new Date().toISOString(),isAssoc:false,operator:p.operator||""};
+      return{...s,statuses:n,statusLog:[entry,...s.statusLog].slice(0,30)};
+    }
+    case"ASSOC_STATUS":{
+      const n={...s.assocStatuses};if(p.status===S.NONE)delete n[p.memberId];else n[p.memberId]=p.status;
+      const entry={memberId:p.memberId,name:p.name||"",status:p.status,ts:new Date().toISOString(),isAssoc:true,operator:p.operator||""};
+      return{...s,assocStatuses:n,statusLog:[entry,...s.statusLog].slice(0,30)};
+    }
     default:return s;
   }
 }
@@ -598,10 +611,15 @@ function DashScreen(){
   const{isAdmin,myBranch,myArea,visibleMembers:vm,visibleAssoc:va}=useRole();
   const allBr=useMemo(()=>[...new Set(state.members.map(m=>m.district||m.branch).filter(Boolean))],[state.members]);
   const[showDl,setShowDl]=useState(false);
+  const[selBranch,setSelBranch]=useState(null);
   useEffect(()=>{const id=setInterval(()=>sync(true),POLL_MS);return()=>clearInterval(id);},[sync]);
   const dOf=m=>m.district||m.branch||"";
   const BTNS=[{icon:"📷",label:"QRスキャン",s:"qr",bg:T.navy},{icon:"✋",label:"手動入力",s:"man",bg:T.nl},{icon:"📋",label:"総代一覧",s:"lst",bg:T.gold},{icon:"📂",label:"名簿更新",s:"csv",bg:"#6b7280"}];
-  const recent=useMemo(()=>(isAdmin?state.members:vm).filter(m=>state.statuses[m.id]).slice(-12).reverse(),[state.members,vm,state.statuses,isAdmin]);
+  const fmtTs=ts=>{if(!ts)return"";try{const d=new Date(ts);return`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;}catch{return"";}};
+  const logEntries=useMemo(()=>{
+    const log=state.statusLog||[];
+    return log.filter(e=>e.status&&e.status!==S.NONE).sort((a,b)=>(b.ts||"").localeCompare(a.ts||"")).slice(0,20);
+  },[state.statusLog]);
   return(
     <div style={{backgroundColor:T.bg,minHeight:"100vh"}}>
       <div className="px-5 sm:px-8 pt-5 pb-4"style={{background:`linear-gradient(135deg,${T.nd},#1a3a6b)`}}>
@@ -615,8 +633,31 @@ function DashScreen(){
       </div>
       <div className="px-5 sm:px-8 py-4 space-y-3"style={{background:`linear-gradient(180deg,#1a3a6b,#1e4d8c)`}}>
         <div className="rounded-2xl p-4"style={{backgroundColor:"rgba(0,0,0,.2)",borderLeft:`4px solid ${T.gold}`}}>
-          <p className="text-xs font-black mb-3"style={{color:T.gold}}>🏛️ 全体集計（総代）</p>
-          <StatsBlock members={state.members}statuses={state.statuses}/>
+          <p className="text-xs font-black mb-2"style={{color:T.gold}}>🏛️ 全体集計</p>
+          <div className="flex items-center gap-2 mb-4 p-3 rounded-xl"style={{backgroundColor:"rgba(255,255,255,.1)"}}>
+            <div className="flex-1 text-center"style={{borderRight:"1px solid rgba(255,255,255,.15)"}}>
+              <div className="text-3xl font-black text-white">{state.members.length+state.assocMembers.length}</div>
+              <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>総代合計</div>
+            </div>
+            <div className="flex-1 text-center"style={{borderRight:"1px solid rgba(255,255,255,.15)"}}>
+              <div className="text-2xl font-black"style={{color:T.gold}}>{state.members.length}<span className="text-xs ml-0.5">名</span></div>
+              <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>正組合員総代</div>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="text-2xl font-black"style={{color:"#5eead4"}}>{state.assocMembers.length}<span className="text-xs ml-0.5">名</span></div>
+              <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>准組合員総代</div>
+            </div>
+          </div>
+          <div className="mb-3 p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.1)",borderLeft:`3px solid ${T.gold}`}}>
+            <p className="text-xs font-black mb-2"style={{color:T.gold}}>正組合員総代（議決権あり）</p>
+            <StatsBlock members={state.members}statuses={state.statuses}/>
+          </div>
+          {state.assocMembers.length>0&&(
+            <div className="p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.1)",borderLeft:`3px solid ${T.teal}`}}>
+              <p className="text-xs font-black mb-2"style={{color:"#5eead4"}}>准組合員総代（議決権なし）</p>
+              <AssocStatsBlock members={state.assocMembers}statuses={state.assocStatuses}/>
+            </div>
+          )}
         </div>
         {!isAdmin&&vm.length>0&&(
           <div className="rounded-2xl p-4"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:"4px solid #60a5fa"}}>
@@ -646,13 +687,13 @@ function DashScreen(){
                 const mTt=bm.length;const mQr=Math.ceil(mTt*QUORUM);const mOk=mEf>=mQr;
                 const aPr=ba.filter(m=>state.assocStatuses[m.id]===S.PRESENT).length;const aTt=ba.length;
                 return(
-                  <div key={br}className="rounded-xl p-3"style={{backgroundColor:"rgba(255,255,255,.08)"}}>
+                  <button key={br}onClick={()=>setSelBranch(br)}className="rounded-xl p-3 text-left active:opacity-80 transition-all"style={{backgroundColor:"rgba(255,255,255,.08)"}}>
                     <div className="flex items-start justify-between mb-2">
                       <div><div className="font-black text-white text-sm">{br}</div>{area&&<div className="text-xs"style={{color:"rgba(255,255,255,.4)"}}>{area}</div>}</div>
-                      <span className="text-xs font-black px-2 py-0.5 rounded-full text-white"style={{backgroundColor:mOk?T.ok:T.warn}}>{mOk?"✓":"—"}</span>
+                      <div className="flex items-center gap-1.5"><span className="text-xs font-black px-2 py-0.5 rounded-full text-white"style={{backgroundColor:mOk?T.ok:T.warn}}>{mOk?"✓":"—"}</span><span className="text-gray-400 text-sm">›</span></div>
                     </div>
                     <div className="mb-1">
-                      <div className="flex justify-between mb-0.5"style={{fontSize:10}}><span style={{color:"rgba(255,255,255,.6)"}}>総代</span><span className="font-black text-white">{mEf}/{mTt}</span></div>
+                      <div className="flex justify-between mb-0.5"style={{fontSize:10}}><span style={{color:"rgba(255,255,255,.6)"}}>正組合員</span><span className="font-black text-white">{mEf}/{mTt}</span></div>
                       <div style={{height:5,borderRadius:9,overflow:"hidden",backgroundColor:"rgba(255,255,255,.2)"}}><div style={{height:"100%",borderRadius:9,width:`${Math.min(100,mQr>0?mEf/mQr*100:0)}%`,backgroundColor:mOk?T.ok:T.warn,transition:"width .7s"}}/></div>
                     </div>
                     {aTt>0&&(
@@ -661,16 +702,10 @@ function DashScreen(){
                         <div style={{height:4,borderRadius:9,overflow:"hidden",backgroundColor:"rgba(255,255,255,.2)"}}><div style={{height:"100%",borderRadius:9,width:`${aTt>0?Math.round(aPr/aTt*100):0}%`,backgroundColor:T.teal,transition:"width .7s"}}/></div>
                       </div>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
-          </div>
-        )}
-        {(isAdmin?state.assocMembers:va).length>0&&(
-          <div className="rounded-2xl p-4"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:`4px solid ${T.teal}`}}>
-            <p className="text-xs font-black mb-3"style={{color:"#5eead4"}}>👥 准組合員総代集計{!isAdmin&&` (${myBranch})`}</p>
-            <AssocStatsBlock members={isAdmin?state.assocMembers:va}statuses={state.assocStatuses}/>
           </div>
         )}
       </div>
@@ -687,19 +722,95 @@ function DashScreen(){
           <span className="ml-auto text-xs px-2 py-0.5 rounded-full text-white"style={{backgroundColor:T.navy}}>{isAdmin?"全体":myBranch}</span>
         </button>
       </div>
-      {recent.length>0&&(
+      {logEntries.length>0&&(
         <div className="px-5 sm:px-8 pb-10">
           <h3 className="font-black text-gray-500 text-sm mb-3">🕐 最近の更新</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {recent.map(m=>{const st=state.statuses[m.id];const cfg=SCFG[st];return(
-              <div key={m.id}className="bg-white rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm"style={{borderLeft:`5px solid ${cfg.dot}`}}>
-                <div className="flex-1 min-w-0"><div className="font-black text-gray-800">{m.name}</div><div className="text-xs text-gray-400 mt-0.5">{dOf(m)}{m.area?` · ${m.area}`:""}</div></div>
-                <SC status={st}size="xl"/>
+            {logEntries.map((e,i)=>{const cfg=SCFG[e.status]||SCFG[S.NONE];const mem=[...state.members,...state.assocMembers].find(m=>m.id===e.memberId);const dist=mem?(mem.district||mem.branch||""):"";return(
+              <div key={`${e.memberId}-${e.ts}-${i}`}className="bg-white rounded-2xl px-4 py-3 flex items-center gap-3 shadow-sm"style={{borderLeft:`5px solid ${cfg.dot}`}}>
+                <div className="flex-1 min-w-0">
+                  <div className="font-black text-gray-800">{e.name||e.memberId}{e.isAssoc&&<span className="text-xs ml-1 font-bold"style={{color:T.teal}}>准</span>}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{dist}{e.operator?` · ${e.operator}`:""}</div>
+                  <div className="text-xs mt-0.5"style={{color:"#9ca3af"}}>{fmtTs(e.ts)}</div>
+                </div>
+                <SC status={e.status}size="xl"/>
               </div>
             );})}
           </div>
         </div>
       )}
+      {selBranch&&(()=>{
+        const bm=state.members.filter(m=>dOf(m)===selBranch);
+        const ba=state.assocMembers.filter(m=>dOf(m)===selBranch);
+        const area=bm[0]?.area||ba[0]?.area||"";
+        const pr=bm.filter(m=>state.statuses[m.id]===S.PRESENT).length;
+        const px=bm.filter(m=>state.statuses[m.id]===S.PROXY).length;
+        const bl=bm.filter(m=>state.statuses[m.id]===S.BALLOT).length;
+        const ab=bm.filter(m=>state.statuses[m.id]===S.ABSENT).length;
+        const nn=bm.length-pr-px-bl-ab;
+        const ef=pr+px+bl;const qr=Math.ceil(bm.length*QUORUM);const ok=ef>=qr;
+        const pc=v=>bm.length>0?Math.round(v/bm.length*100):0;
+        const aPr=ba.filter(m=>state.assocStatuses[m.id]===S.PRESENT).length;
+        const aAb=ba.filter(m=>state.assocStatuses[m.id]===S.ABSENT).length;
+        const aNn=ba.length-aPr-aAb;
+        return(
+          <div className="mo"onClick={()=>setSelBranch(null)}>
+            <div className="ms"onClick={e=>e.stopPropagation()}>
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <p className="font-black text-2xl text-gray-800">🏢 {selBranch}</p>
+                  {area&&<p className="text-sm text-gray-400">{area}</p>}
+                </div>
+                <button onClick={()=>setSelBranch(null)}className="text-gray-300 text-3xl leading-none">×</button>
+              </div>
+              <div className="mb-4 p-3 rounded-xl"style={{backgroundColor:ok?"#ecfdf5":"#fef3c7",borderLeft:`4px solid ${ok?T.ok:T.warn}`}}>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold"style={{color:ok?T.ok:T.warn}}>定足数 {ok?"達成":"未達成"}</span>
+                  <span className="font-black text-lg"style={{color:ok?T.ok:T.warn}}>{ef}/{qr}名</span>
+                </div>
+              </div>
+              <p className="text-xs font-black text-gray-500 mb-2"style={{color:T.gold}}>正組合員総代 ({bm.length}名)</p>
+              <div className="grid grid-cols-5 gap-1.5 mb-4">
+                {[{l:"出席",v:pr,c:T.ok},{l:"代理",v:px,c:T.nl},{l:"書面",v:bl,c:T.gold},{l:"欠席",v:ab,c:"#9ca3af"},{l:"未入力",v:nn,c:T.warn}].map(({l,v,c})=>(
+                  <div key={l}className="text-center rounded-lg py-2"style={{backgroundColor:"#f8fafc"}}>
+                    <div className="text-lg font-black"style={{color:c}}>{v}</div>
+                    <div className="text-xs text-gray-400">{pc(v)}%</div>
+                    <div className="text-xs text-gray-500">{l}</div>
+                  </div>
+                ))}
+              </div>
+              {ba.length>0&&(
+                <div>
+                  <p className="text-xs font-black text-gray-500 mb-2"style={{color:T.teal}}>准組合員総代 ({ba.length}名)</p>
+                  <div className="grid grid-cols-3 gap-1.5 mb-4">
+                    {[{l:"出席",v:aPr,c:T.ok},{l:"欠席",v:aAb,c:"#9ca3af"},{l:"未入力",v:aNn,c:T.warn}].map(({l,v,c})=>(
+                      <div key={l}className="text-center rounded-lg py-2"style={{backgroundColor:"#f8fafc"}}>
+                        <div className="text-lg font-black"style={{color:c}}>{v}</div>
+                        <div className="text-xs text-gray-500">{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs font-black text-gray-500 mb-2">総代一覧</p>
+              <div className="space-y-1.5 sy"style={{maxHeight:"35vh"}}>
+                {bm.map(m=>{const st=state.statuses[m.id]||S.NONE;return(
+                  <div key={m.id}className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+                    <div className="flex-1 min-w-0"><div className="font-bold text-gray-800 text-sm">{m.name}</div><div className="text-xs text-gray-400">{m.nameKana}</div></div>
+                    <SC status={st}size="sm"/>
+                  </div>
+                );})}
+                {ba.map(m=>{const st=state.assocStatuses[m.id]||S.NONE;return(
+                  <div key={m.id}className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+                    <div className="flex-1 min-w-0"><div className="font-bold text-gray-800 text-sm">{m.name}<span className="text-xs ml-1 font-bold"style={{color:T.teal}}>准</span></div></div>
+                    <SC status={st}size="sm"/>
+                  </div>
+                );})}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {showDl&&<DownloadModal onClose={()=>setShowDl(false)}/>}
     </div>
   );
@@ -735,8 +846,8 @@ function QRScreen(){
   const onStatus=async(status,proxy)=>{
     if(!status)return;
     const{m,a}=found;
-    if(a){dispatch({type:"ASSOC_STATUS",p:{memberId:m.id,status}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:m.id,memberName:m.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
-    else{dispatch({type:"STATUS",p:{memberId:m.id,status}});if(!IS_DEMO)try{await api.updateStatus({memberId:m.id,memberName:m.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    if(a){dispatch({type:"ASSOC_STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:m.id,memberName:m.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    else{dispatch({type:"STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateStatus({memberId:m.id,memberName:m.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
     toast(`✅ ${m.name}様 → ${status}`);setPhase("done");setTimeout(()=>{setPhase("idle");setFound(null);},2200);
   };
   const ds=found?(found.a?state.assocStatuses[found.m.id]:state.statuses[found.m.id])||S.NONE:S.NONE;
@@ -788,8 +899,8 @@ function ManualScreen(){
   const isA=tab==="assoc";
   const onStatus=async(status,proxy)=>{
     if(!status){toast("ステータスを選択してください","warn");return;}
-    if(isA){dispatch({type:"ASSOC_STATUS",p:{memberId:sel.id,status}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:sel.id,memberName:sel.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
-    else{dispatch({type:"STATUS",p:{memberId:sel.id,status}});if(!IS_DEMO)try{await api.updateStatus({memberId:sel.id,memberName:sel.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    if(isA){dispatch({type:"ASSOC_STATUS",p:{memberId:sel.id,name:sel.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:sel.id,memberName:sel.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    else{dispatch({type:"STATUS",p:{memberId:sel.id,name:sel.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateStatus({memberId:sel.id,memberName:sel.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
     toast(`✅ ${sel.name}様 → ${status}`);setSel(null);
   };
   const cur=sel?(isA?state.assocStatuses[sel.id]:state.statuses[sel.id])||S.NONE:S.NONE;
@@ -830,8 +941,8 @@ function ListScreen(){
   },[bm,bs,q,filter]);
   const onStatus=async(status,proxy)=>{
     if(!status){toast("ステータスを選択してください","warn");return;}
-    if(isA){dispatch({type:"ASSOC_STATUS",p:{memberId:chg.id,status}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:chg.id,memberName:chg.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
-    else{dispatch({type:"STATUS",p:{memberId:chg.id,status}});if(!IS_DEMO)try{await api.updateStatus({memberId:chg.id,memberName:chg.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    if(isA){dispatch({type:"ASSOC_STATUS",p:{memberId:chg.id,name:chg.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:chg.id,memberName:chg.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    else{dispatch({type:"STATUS",p:{memberId:chg.id,name:chg.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateStatus({memberId:chg.id,memberName:chg.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
     toast(`${chg.name}様 → ${status}`);setChg(null);setSel(null);
   };
   const TABS=[{k:"all",l:"全員",c:stats.tt},{k:"none",l:"未入力",c:stats.nn},{k:"present",l:"出席",c:stats.pr},...(!isA?[{k:"proxy",l:"代理",c:stats.px},{k:"ballot",l:"書面",c:stats.bl}]:[]),{k:"absent",l:"欠席",c:stats.ab}];
