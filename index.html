@@ -32,8 +32,8 @@
 const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext}=React;
 
 /* ── CONFIG ── */
-const GAS_URL="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
-const IS_DEMO=GAS_URL==="YOUR_GAS_URL_HERE";
+const GAS_URL="YOUR_GAS_URL_HERE";
+const IS_DEMO=GAS_URL==="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
 const POLL_MS=10000;
 const QUORUM=0.5;
 const S={NONE:"未入力",PRESENT:"出席",PROXY:"代理出席",BALLOT:"書面議決",ABSENT:"欠席"};
@@ -661,17 +661,29 @@ function DashScreen(){
         </div>
         {!isAdmin&&vm.length>0&&(
           <div className="rounded-2xl p-4"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:"4px solid #60a5fa"}}>
-            <p className="text-xs font-black mb-1"style={{color:"#93c5fd"}}>🏢 {myBranch}{myArea?` / ${myArea}`:""}</p>
-            <BranchCard members={vm}statuses={state.statuses}branchName={myBranch}areaName={myArea}/>
+            <p className="text-xs font-black mb-2"style={{color:"#93c5fd"}}>🏢 {myBranch}{myArea?` / ${myArea}`:""}</p>
+            <div className="flex items-center gap-2 mb-4 p-3 rounded-xl"style={{backgroundColor:"rgba(255,255,255,.1)"}}>
+              <div className="flex-1 text-center"style={{borderRight:"1px solid rgba(255,255,255,.15)"}}>
+                <div className="text-3xl font-black text-white">{vm.length+va.length}</div>
+                <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>支店総代合計</div>
+              </div>
+              <div className="flex-1 text-center"style={{borderRight:"1px solid rgba(255,255,255,.15)"}}>
+                <div className="text-2xl font-black"style={{color:T.gold}}>{vm.length}<span className="text-xs ml-0.5">名</span></div>
+                <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>正組合員総代</div>
+              </div>
+              <div className="flex-1 text-center">
+                <div className="text-2xl font-black"style={{color:"#5eead4"}}>{va.length}<span className="text-xs ml-0.5">名</span></div>
+                <div className="text-xs font-bold"style={{color:"rgba(255,255,255,.6)"}}>准組合員総代</div>
+              </div>
+            </div>
+            <div className="mb-3 p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.1)",borderLeft:`3px solid ${T.gold}`}}>
+              <p className="text-xs font-black mb-2"style={{color:T.gold}}>正組合員総代（議決権あり）</p>
+              <StatsBlock members={vm}statuses={state.statuses}/>
+            </div>
             {va.length>0&&(
-              <div className="mt-3 p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.15)",borderLeft:`3px solid ${T.teal}`}}>
-                <p className="text-xs font-black mb-2"style={{color:"#5eead4"}}>准組合員（議決権なし）</p>
-                <div className="flex items-center gap-4">
-                  <div className="text-center"><div className="text-lg font-black text-white">{va.filter(m=>state.assocStatuses[m.id]===S.PRESENT).length}</div><div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>出席</div></div>
-                  <div className="text-center"><div className="text-lg font-black"style={{color:"#9ca3af"}}>{va.filter(m=>state.assocStatuses[m.id]===S.ABSENT).length}</div><div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>欠席</div></div>
-                  <div className="text-center"><div className="text-lg font-black"style={{color:T.warn}}>{va.length-va.filter(m=>state.assocStatuses[m.id]===S.PRESENT||state.assocStatuses[m.id]===S.ABSENT).length}</div><div className="text-xs"style={{color:"rgba(255,255,255,.5)"}}>未入力</div></div>
-                  <div className="flex-1 text-right"><div className="text-xs"style={{color:"rgba(255,255,255,.4)"}}>対象{va.length}名</div></div>
-                </div>
+              <div className="p-3 rounded-xl"style={{backgroundColor:"rgba(0,0,0,.1)",borderLeft:`3px solid ${T.teal}`}}>
+                <p className="text-xs font-black mb-2"style={{color:"#5eead4"}}>准組合員総代（議決権なし）</p>
+                <AssocStatsBlock members={va}statuses={state.assocStatuses}/>
               </div>
             )}
           </div>
