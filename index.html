@@ -7,11 +7,45 @@
   <meta name="theme-color" content="#1B365D"/>
   <meta name="mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
-  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
-  <script src="https://cdn.tailwindcss.com/3.4.4"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js" async></script>
+  <script>
+    // CDN読み込み失敗を検知してフォールバックする仕組み
+    window.__cdnErrors = [];
+    window.__babelReady = false;
+    function loadScript(urls, name, cb) {
+      let idx = 0;
+      function tryLoad() {
+        if (idx >= urls.length) {
+          window.__cdnErrors.push(name);
+          var el = document.getElementById("cdn-error");
+          if (el) el.style.display = "flex";
+          return;
+        }
+        const s = document.createElement("script");
+        s.src = urls[idx];
+        s.onload = () => cb && cb();
+        s.onerror = () => { idx++; tryLoad(); };
+        document.head.appendChild(s);
+      }
+      tryLoad();
+    }
+    // Babelが（フォールバック経由で）読み込まれた場合に手動変換
+    function ensureBabelTransform() {
+      if (window.Babel && !window.__babelReady) {
+        window.__babelReady = true;
+        try { window.Babel.transformScriptTags(); } catch(e) {}
+      }
+    }
+  </script>
+  <!-- React（複数CDNフォールバック） -->
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"
+    onerror="loadScript(['https://unpkg.com/react@18.2.0/umd/react.production.min.js','https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js'],'React')"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"
+    onerror="loadScript(['https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js','https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js'],'ReactDOM')"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"
+    onerror="loadScript(['https://unpkg.com/@babel/standalone@7.24.7/babel.min.js','https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js'],'Babel',ensureBabelTransform)"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js" async
+    onerror="this.remove()"></script>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet"/>
   <style>
     *{box-sizing:border-box}
@@ -28,11 +62,17 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="text/babel">
+<div id="cdn-error" style="display:none;position:fixed;inset:0;z-index:9999;background:#0d1f36;color:#fff;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;font-family:'Noto Sans JP',sans-serif">
+  <div style="font-size:48px;margin-bottom:16px">📡</div>
+  <h2 style="font-size:20px;font-weight:900;margin:0 0 12px">読み込みに失敗しました</h2>
+  <p style="font-size:14px;opacity:.7;margin:0 0 24px;line-height:1.6">ネットワーク接続を確認して<br/>ページを再読み込みしてください</p>
+  <button onclick="location.reload()" style="background:#C5A55A;color:#fff;border:none;border-radius:14px;padding:14px 32px;font-size:16px;font-weight:700">再読み込み</button>
+</div>
+<script type="text/babel" data-presets="react,env">
 const {useState,useReducer,useEffect,useCallback,useMemo,useRef,createContext,useContext}=React;
 
 /* ── CONFIG ── */
-const GAS_URL="https://script.google.com/macros/s/AKfycbzANpXVUDpMN5CAuAa7Hihxk_uP4-VkbElKz91Ok3PJgFFnQlI9ViLGo0y9m6m-jMZNOg/exec";
+const GAS_URL="YOUR_GAS_URL_HERE";
 const IS_DEMO=GAS_URL==="YOUR_GAS_URL_HERE";
 const POLL_MS=10000;
 const QUORUM=0.5;
@@ -182,7 +222,7 @@ function Hdr({title,onBack}){
 
 /* ── STATUS MODAL ── */
 function StatusModal({member,current,onClose,onSelect,assoc=false}){
-  const[sel,setSel]=useState(current===S.NONE?null:current);
+  const[proxyMode,setProxyMode]=useState(false); // 代理人氏名入力中フラグ
   const[proxy,setProxy]=useState("");
   const OPTS=assoc?[
     {s:S.PRESENT,sub:"当日来場",icon:"✓"},
@@ -195,9 +235,11 @@ function StatusModal({member,current,onClose,onSelect,assoc=false}){
     {s:S.ABSENT,sub:"欠席確定",icon:"×"},
     {s:S.NONE,sub:"リセット",icon:"—"},
   ];
-  const np=sel===S.PROXY;
-  const canOk=sel!==null&&sel!==current&&(!np||proxy.trim().length>0);
-  const sc=sel?SCFG[sel]:null;
+  // ステータスをタップ → 代理出席なら氏名入力へ、それ以外は即確定
+  const handleTap=s=>{
+    if(s===S.PROXY){setProxyMode(true);return;}
+    onSelect(s,"");
+  };
   return(
     <div className="mo"onClick={onClose}>
       <div className="ms"onClick={e=>e.stopPropagation()}>
@@ -209,31 +251,35 @@ function StatusModal({member,current,onClose,onSelect,assoc=false}){
           </div>
           <button onClick={onClose}className="text-gray-300 text-3xl leading-none">×</button>
         </div>
-        <p className="text-xs font-bold text-gray-400 mb-2">ステータスを選択</p>
-        <div className="space-y-2 mb-4">
-          {OPTS.map(({s,sub,icon})=>{
-            const is=sel===s;const cfg=SCFG[s];
-            return(
-              <button key={s}onClick={()=>{setSel(s);if(s!==S.PROXY)setProxy("");}}className="w-full flex items-center gap-4 rounded-2xl px-4 py-3.5 text-left transition-all active:scale-98"style={{backgroundColor:is?cfg.bg:"#f8fafc",border:is?`2px solid ${cfg.dot}`:"2px solid #f1f5f9"}}>
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-base shrink-0"style={{backgroundColor:is?"rgba(255,255,255,.25)":cfg.bg,color:is?"#fff":cfg.fg}}>{icon}</div>
-                <div className="flex-1">
-                  <p className="font-black text-sm"style={{color:is?"#fff":"#1f2937"}}>{s}</p>
-                  <p className="text-xs"style={{color:is?"rgba(255,255,255,.7)":"#9ca3af"}}>{sub}</p>
-                </div>
-                {is&&<div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"style={{backgroundColor:"rgba(255,255,255,.3)"}}><span className="text-white text-sm font-black">✓</span></div>}
-              </button>
-            );
-          })}
-        </div>
-        {np&&(
-          <div className="mb-4">
+        {!proxyMode?(
+          <div>
+            <p className="text-xs font-bold text-gray-400 mb-2">タップで即変更</p>
+            <div className="space-y-2">
+              {OPTS.map(({s,sub,icon})=>{
+                const is=current===s;const cfg=SCFG[s];
+                return(
+                  <button key={s}onClick={()=>handleTap(s)}className="w-full flex items-center gap-4 rounded-2xl px-4 py-3.5 text-left transition-all active:scale-95"style={{backgroundColor:is?cfg.bg:"#f8fafc",border:is?`2px solid ${cfg.dot}`:"2px solid #f1f5f9"}}>
+                    <div className="w-9 h-9 rounded-xl flex items-center justify-center font-black text-base shrink-0"style={{backgroundColor:is?"rgba(255,255,255,.25)":cfg.bg,color:is?"#fff":cfg.fg}}>{icon}</div>
+                    <div className="flex-1">
+                      <p className="font-black text-sm"style={{color:is?"#fff":"#1f2937"}}>{s}</p>
+                      <p className="text-xs"style={{color:is?"rgba(255,255,255,.7)":"#9ca3af"}}>{sub}</p>
+                    </div>
+                    {is?<span className="text-xs font-bold"style={{color:"rgba(255,255,255,.7)"}}>現在</span>:<span className="text-gray-300 text-lg">›</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ):(
+          <div>
+            <button onClick={()=>{setProxyMode(false);setProxy("");}}className="text-sm font-bold mb-3"style={{color:T.nl}}>← 戻る</button>
             <p className="text-xs font-bold text-gray-500 mb-1">代理人氏名 <span style={{color:T.ng}}>*必須</span></p>
-            <input value={proxy}onChange={e=>setProxy(e.target.value)}placeholder="代理人のフルネーム"className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-sm focus:outline-none"/>
+            <input value={proxy}onChange={e=>setProxy(e.target.value)}placeholder="代理人のフルネーム"autoFocus className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-gray-200 text-sm focus:outline-none mb-4"/>
+            <button onClick={()=>{if(proxy.trim())onSelect(S.PROXY,proxy.trim());}}disabled={!proxy.trim()}className="w-full py-4 rounded-2xl font-black text-white text-lg active:scale-95 disabled:opacity-30"style={{backgroundColor:SCFG[S.PROXY].bg}}>
+              {proxy.trim()?"代理出席で確定する":"代理人氏名を入力してください"}
+            </button>
           </div>
         )}
-        <button onClick={()=>{if(canOk)onSelect(sel,proxy.trim());}}disabled={!canOk}className="w-full py-4 rounded-2xl font-black text-white text-lg transition-all active:scale-95 disabled:opacity-30"style={{backgroundColor:sc?.bg||T.navy}}>
-          {!sel?"ステータスを選んでください":sel===current?"変更なし":np&&!proxy.trim()?"代理人氏名を入力してください":`「${sel}」で確定する`}
-        </button>
       </div>
     </div>
   );
@@ -615,11 +661,12 @@ function DashScreen(){
   useEffect(()=>{const id=setInterval(()=>sync(true),POLL_MS);return()=>clearInterval(id);},[sync]);
   const dOf=m=>m.district||m.branch||"";
   const BTNS=[{icon:"📷",label:"QRスキャン",s:"qr",bg:T.navy},{icon:"✋",label:"手動入力",s:"man",bg:T.nl},{icon:"📋",label:"総代一覧",s:"lst",bg:T.gold},{icon:"📂",label:"名簿更新",s:"csv",bg:"#6b7280"}];
-  const fmtTs=ts=>{if(!ts)return"";try{const d=new Date(ts);return`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;}catch{return"";}};
+  const fmtTs=ts=>{if(!ts)return"";try{let d=new Date(ts);if(isNaN(d.getTime())){const m=String(ts).match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s*(\d{1,2}):(\d{2})/);if(m)d=new Date(m[1],m[2]-1,m[3],m[4],m[5]);else return String(ts).slice(0,16);}return`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;}catch{return"";}};
   const logEntries=useMemo(()=>{
-    const log=state.statusLog||[];
-    return log.filter(e=>e.status&&e.status!==S.NONE).sort((a,b)=>(b.ts||"").localeCompare(a.ts||"")).slice(0,20);
-  },[state.statusLog]);
+    let log=(state.statusLog||[]).filter(e=>e.status&&e.status!==S.NONE);
+    if(!isAdmin){const ids=new Set([...vm,...va].map(m=>m.id));log=log.filter(e=>ids.has(e.memberId));}
+    return log.sort((a,b)=>(b.ts||"").localeCompare(a.ts||"")).slice(0,20);
+  },[state.statusLog,isAdmin,vm,va]);
   return(
     <div style={{backgroundColor:T.bg,minHeight:"100vh"}}>
       <div className="px-5 sm:px-8 pt-5 pb-4"style={{background:`linear-gradient(135deg,${T.nd},#1a3a6b)`}}>
@@ -830,7 +877,7 @@ function DashScreen(){
 
 /* ── QR READER ── */
 function QrReader({members,onFound,onError}){
-  const ref=useRef(null);const sr=useRef(null);
+  const ref=useRef(null);const sr=useRef(null);const lastScan=useRef({id:null,ts:0});
   useEffect(()=>{
     if(!ref.current)return;let cancelled=false;
     const go=(n=0)=>{
@@ -838,7 +885,13 @@ function QrReader({members,onFound,onError}){
       if(!window.Html5Qrcode){if(n>20){onError("QRライブラリタイムアウト");return;}setTimeout(()=>go(n+1),100);return;}
       const s=new window.Html5Qrcode(ref.current.id);sr.current=s;
       s.start({facingMode:"environment"},{fps:10,qrbox:{width:240,height:240}},
-        text=>{const m=members.find(x=>x.id===text);if(m)onFound(m);else onError("一致する総代なし");},()=>{}
+        text=>{
+          const now=Date.now();
+          // 同じIDを3秒以内に再読み取りしたら無視（連続スキャン時の重複防止）
+          if(lastScan.current.id===text&&now-lastScan.current.ts<3000)return;
+          lastScan.current={id:text,ts:now};
+          const m=members.find(x=>x.id===text);if(m)onFound(m);else onError("一致する総代なし");
+        },()=>{}
       ).catch(()=>onError("カメラ起動失敗"));
     };go();
     return()=>{cancelled=true;if(sr.current){sr.current.stop().catch(()=>{});sr.current=null;}};
@@ -849,54 +902,58 @@ function QrReader({members,onFound,onError}){
 /* ── QR SCREEN ── */
 function QRScreen(){
   const{state,dispatch}=useApp();const{visibleMembers:vm,visibleAssoc:va}=useRole();const toast=useToast();
-  const[phase,setPhase]=useState("idle");const[found,setFound]=useState(null);
+  const[phase,setPhase]=useState("idle");const[last,setLast]=useState(null);
   const[demoId,setDemoId]=useState("");
   const all=useMemo(()=>[...vm.map(m=>({...m,_a:false})),...va.map(m=>({...m,_a:true}))],[vm,va]);
   useEffect(()=>{if(all.length>0)setDemoId(all[0].id);},[all.length]);
-  const onFound=m=>{setFound({m,a:m._a});setPhase("confirm");};
-  const onErr=msg=>{toast(msg,"error");setPhase("idle");};
-  const onStatus=async(status,proxy)=>{
-    if(!status)return;
-    const{m,a}=found;
-    if(a){dispatch({type:"ASSOC_STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:m.id,memberName:m.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
-    else{dispatch({type:"STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateStatus({memberId:m.id,memberName:m.name,status,proxyName:proxy||"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
-    toast(`✅ ${m.name}様 → ${status}`);setPhase("done");setTimeout(()=>{setPhase("idle");setFound(null);},2200);
+  // QR読み取り → 即「出席」登録（確認なし）
+  const registerPresent=async m=>{
+    const isA=m._a;const status=S.PRESENT;
+    if(isA){dispatch({type:"ASSOC_STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateAssocStatus({memberId:m.id,memberName:m.name,status,operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    else{dispatch({type:"STATUS",p:{memberId:m.id,name:m.name,status,operator:state.user?.name}});if(!IS_DEMO)try{await api.updateStatus({memberId:m.id,memberName:m.name,status,proxyName:"",operator:state.user?.name,ts:new Date().toISOString()});}catch{}}
+    setLast({name:m.name,isA});
+    toast(`✅ ${m.name}様 出席`);
   };
-  const ds=found?(found.a?state.assocStatuses[found.m.id]:state.statuses[found.m.id])||S.NONE:S.NONE;
+  const onFound=m=>{registerPresent(m);};
+  const onErr=msg=>{toast(msg,"error");};
   return(
     <div className="sy"style={{minHeight:"100vh",background:BG}}>
       <div className="px-5 pt-6 pb-8">
-        <Hdr title="📷 QRスキャン"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
+        <Hdr title="📷 QRスキャン（出席受付）"onBack={()=>dispatch({type:"SCREEN",p:"dash"})}/>
         {phase==="idle"&&(
-          <div className="flex flex-col items-center pt-8 gap-5">
+          <div className="flex flex-col items-center pt-6 gap-5">
             <div className="w-52 h-52 rounded-3xl flex items-center justify-center"style={{backgroundColor:"rgba(255,255,255,.1)",fontSize:80}}>📷</div>
+            <p className="text-center text-sm"style={{color:"rgba(255,255,255,.6)"}}>QRを読み取ると<span className="font-black"style={{color:"#fff"}}>「出席」</span>で即登録されます<br/>代理・書面・欠席は手動入力をご利用ください</p>
             {IS_DEMO?(
               <div className="w-full space-y-3">
                 <select value={demoId}onChange={e=>setDemoId(e.target.value)}className="w-full px-4 py-3 rounded-xl text-sm">
                   <optgroup label="総代">{vm.map(m=><option key={m.id}value={m.id}>{m.name}（{m.id}）</option>)}</optgroup>
                   {va.length>0&&<optgroup label="准組合員">{va.map(m=><option key={m.id}value={m.id}>{m.name}（{m.id}）准</option>)}</optgroup>}
                 </select>
-                <button onClick={()=>{const m=all.find(x=>x.id===demoId);if(m)onFound(m);}}className="w-full py-4 rounded-2xl font-bold text-white active:scale-95"style={{backgroundColor:T.gold}}>受付する</button>
+                <button onClick={()=>{const m=all.find(x=>x.id===demoId);if(m)registerPresent(m);}}className="w-full py-4 rounded-2xl font-bold text-white active:scale-95"style={{backgroundColor:T.gold}}>出席登録（デモ）</button>
               </div>
             ):(
               <button onClick={()=>setPhase("scan")}className="px-10 py-4 rounded-2xl font-bold text-white text-lg active:scale-95"style={{backgroundColor:T.gold}}>スキャン開始</button>
+            )}
+            {last&&(
+              <div className="w-full mt-2 p-4 rounded-2xl flex items-center gap-3"style={{backgroundColor:"rgba(255,255,255,.12)"}}>
+                <span style={{fontSize:28}}>✅</span>
+                <div><div className="text-white font-black">{last.name}様{last.isA&&<span className="text-xs ml-1"style={{color:"#5eead4"}}>准</span>}</div><div className="text-xs"style={{color:"rgba(255,255,255,.6)"}}>出席を登録しました</div></div>
+              </div>
             )}
           </div>
         )}
         {phase==="scan"&&(
           <div>
             <QrReader members={all}onFound={onFound}onError={onErr}/>
-            <button onClick={()=>setPhase("idle")}className="mt-4 w-full py-3 rounded-2xl font-bold text-sm text-white"style={{backgroundColor:"rgba(255,255,255,.15)"}}>キャンセル</button>
-          </div>
-        )}
-        {phase==="confirm"&&found&&(
-          <StatusModal member={found.m}current={found.a?(state.assocStatuses[found.m.id]||S.NONE):(state.statuses[found.m.id]||S.NONE)}assoc={found.a}onClose={()=>{setPhase("idle");setFound(null);}}onSelect={onStatus}/>
-        )}
-        {phase==="done"&&(
-          <div className="flex flex-col items-center pt-16 gap-4">
-            <div style={{fontSize:96}}>✅</div>
-            <p className="text-white font-black text-2xl">登録完了！</p>
-            <SC status={ds}size="lg"/>
+            <p className="text-center text-sm mt-3"style={{color:"rgba(255,255,255,.7)"}}>読み取ると自動で「出席」登録 · 連続スキャン可能</p>
+            {last&&(
+              <div className="mt-3 p-3 rounded-2xl flex items-center gap-3"style={{backgroundColor:"rgba(22,163,74,.25)"}}>
+                <span style={{fontSize:24}}>✅</span>
+                <div className="text-white font-bold text-sm">{last.name}様 出席登録済</div>
+              </div>
+            )}
+            <button onClick={()=>setPhase("idle")}className="mt-4 w-full py-3 rounded-2xl font-bold text-sm text-white"style={{backgroundColor:"rgba(255,255,255,.15)"}}>スキャン終了</button>
           </div>
         )}
       </div>
@@ -1009,7 +1066,18 @@ function App(){
     </Ctx.Provider>
   );
 }
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+// React/ReactDOM が揃ってからレンダリング（CDN遅延対策）
+(function renderWhenReady(attempts){
+  attempts = attempts || 0;
+  if (typeof React !== "undefined" && typeof ReactDOM !== "undefined") {
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  } else if (attempts < 100) {
+    setTimeout(()=>renderWhenReady(attempts+1), 100);
+  } else {
+    var el = document.getElementById("cdn-error");
+    if (el) el.style.display = "flex";
+  }
+})();
 </script>
 </body>
 </html>
